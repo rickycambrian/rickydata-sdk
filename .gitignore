@@ -1,5 +1,7 @@
 node_modules/
 dist/
+!packages/core/vendor/erc8128/dist/
+!packages/core/vendor/erc8128/dist/**
 *.tgz
 .turbo/
 coverage/
