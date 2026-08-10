@@ -22,6 +22,7 @@ import { createBenchCommands } from './commands/bench.js';
 import { toCliError } from './errors.js';
 import { CLI_VERSION } from './version.js';
 import { handleResume } from './commands/resume.js';
+import { createLearnCommands } from './commands/learn.js';
 
 export function createProgram(configManager?: ConfigManager, credentialStore?: CredentialStore): Command {
   const config = configManager ?? new ConfigManager();
@@ -51,6 +52,7 @@ export function createProgram(configManager?: ConfigManager, credentialStore?: C
   program.addCommand(createTrackingCommands(config, store));
   program.addCommand(createSpecialistCommands(config, store));
   program.addCommand(createBenchCommands(config, store));
+  program.addCommand(createLearnCommands());
 
   return program;
 }
