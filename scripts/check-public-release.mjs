@@ -53,6 +53,9 @@ const allowedTopLevel = new Set([
   'tsconfig.base.json',
   'turbo.json',
 ]);
+const requiredFiles = [
+  'packages/core/vendor/erc8128/dist/esm/index.js',
+];
 
 function normalize(path) {
   return path.split('\\').join('/');
@@ -112,6 +115,9 @@ for (const entry of readdirSync(repoRoot)) {
   if (entry !== '.git' && !skipDirectories.has(entry) && !allowedTopLevel.has(entry)) {
     fail(`Unexpected top-level release path: ${entry}`);
   }
+}
+for (const path of requiredFiles) {
+  if (!existsSync(join(repoRoot, path))) fail(`Required public runtime file is missing: ${path}`);
 }
 walk(repoRoot);
 
