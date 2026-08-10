@@ -1,0 +1,53 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://rickydata.org/schemas/learning-candidate-v1.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version", "lessons"],
+  "properties": {
+    "version": { "const": 1 },
+    "lessons": {
+      "type": "array",
+      "maxItems": 3,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["title", "summary", "markdown", "claims", "citations"],
+        "properties": {
+          "title": { "type": "string", "minLength": 1, "maxLength": 160 },
+          "summary": { "type": "string", "minLength": 1, "maxLength": 800 },
+          "markdown": { "type": "string", "minLength": 1, "maxLength": 65536 },
+          "claims": {
+            "type": "array",
+            "maxItems": 48,
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["text", "citationIndexes"],
+              "properties": {
+                "text": { "type": "string", "minLength": 1, "maxLength": 1200 },
+                "citationIndexes": { "type": "array", "minItems": 1, "maxItems": 8, "items": { "type": "integer", "minimum": 0, "maximum": 23 } }
+              }
+            }
+          },
+          "citations": {
+            "type": "array",
+            "maxItems": 24,
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["sha", "path", "startLine", "endLine", "excerpt"],
+              "properties": {
+                "sha": { "type": "string", "pattern": "^[a-f0-9]{40}$" },
+                "path": { "type": "string", "minLength": 1, "maxLength": 500 },
+                "startLine": { "type": "integer", "minimum": 1 },
+                "endLine": { "type": "integer", "minimum": 1 },
+                "excerpt": { "type": "string", "minLength": 1, "maxLength": 2048 }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

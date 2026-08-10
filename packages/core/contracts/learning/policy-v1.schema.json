@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://rickydata.org/schemas/learning-policy-v1.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version", "repository", "branch", "workflowPath", "schedule", "maxCommits", "maxBytes"],
+  "properties": {
+    "version": { "const": 1 },
+    "repository": { "type": "string", "pattern": "^[^/\\s]+/[^/\\s]+$" },
+    "branch": { "type": "string", "minLength": 1, "maxLength": 200 },
+    "workflowPath": { "const": ".github/workflows/rickydata-learn.yml" },
+    "schedule": { "const": "15 6 * * *" },
+    "maxCommits": { "type": "integer", "minimum": 1, "maximum": 20 },
+    "maxBytes": { "type": "integer", "minimum": 1, "maximum": 26214400 },
+    "exclude": { "type": "array", "maxItems": 100, "items": { "type": "string", "minLength": 1, "maxLength": 256 } }
+  }
+}

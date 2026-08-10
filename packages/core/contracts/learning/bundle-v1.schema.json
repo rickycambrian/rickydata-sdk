@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://rickydata.org/schemas/learning-bundle-v1.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version", "runId", "repository", "ref", "headSha", "cursorSha", "commits", "sourceDigest", "candidate", "verification", "digest"],
+  "properties": {
+    "version": { "const": 1 },
+    "runId": { "type": "string", "minLength": 1, "maxLength": 200 },
+    "repository": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "fullName"],
+      "properties": { "id": { "type": "string", "minLength": 1, "maxLength": 64 }, "fullName": { "type": "string", "minLength": 1, "maxLength": 200 } }
+    },
+    "ref": { "type": "string", "minLength": 1, "maxLength": 300 },
+    "headSha": { "type": "string", "pattern": "^[a-f0-9]{40}$" },
+    "cursorSha": { "type": ["string", "null"], "pattern": "^[a-f0-9]{40}$" },
+    "commits": { "type": "array", "maxItems": 20, "items": { "type": "string", "pattern": "^[a-f0-9]{40}$" } },
+    "sourceDigest": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "candidate": { "$ref": "candidate-v1.schema.json" },
+    "verification": { "$ref": "verification-v1.schema.json" },
+    "digest": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+  }
+}
