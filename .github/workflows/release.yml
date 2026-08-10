@@ -39,7 +39,8 @@ jobs:
           const config = JSON.parse(readFileSync('public-release.json', 'utf8'));
           for (const workspace of config.publishPackages) {
             const output = execFileSync('npm', ['pack', '--dry-run', '--json', '-w', workspace], { encoding: 'utf8' });
-            const packed = JSON.parse(output)[0];
+            const result = JSON.parse(output);
+            const packed = Array.isArray(result) ? result[0] : Object.values(result)[0];
             if (!packed?.files?.length) throw new Error(`${workspace} produced an empty package`);
           }
           NODE
