@@ -15,8 +15,8 @@ jobs:
     name: Verify release
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version: 24
           cache: npm
@@ -53,8 +53,8 @@ jobs:
     outputs:
       published: ${{ steps.targets.outputs.published }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: npm
@@ -79,10 +79,12 @@ jobs:
           console.log(`Publishing ${targets.join(', ')}`);
           NODE
       - name: Publish new versions
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
           IFS=',' read -r -a targets <<< "${{ steps.targets.outputs.published }}"
           for workspace in "${targets[@]}"; do
-            npm publish -w "$workspace" --access public
+            npm publish -w "$workspace" --provenance --access public
           done
       - name: Create GitHub release
         env:
@@ -95,8 +97,8 @@ jobs:
     needs: publish
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
           registry-url: https://registry.npmjs.org
