@@ -18,9 +18,10 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: 24
           cache: npm
           registry-url: https://registry.npmjs.org
+      - run: npm install --global npm@latest
       - run: npm ci
       - run: npm audit --omit=dev --audit-level=high
       - run: npm run check:public
@@ -78,12 +79,10 @@ jobs:
           console.log(`Publishing ${targets.join(', ')}`);
           NODE
       - name: Publish new versions
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
           IFS=',' read -r -a targets <<< "${{ steps.targets.outputs.published }}"
           for workspace in "${targets[@]}"; do
-            npm publish -w "$workspace" --provenance --access public
+            npm publish -w "$workspace" --access public
           done
       - name: Create GitHub release
         env:

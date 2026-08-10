@@ -27,4 +27,6 @@ git push origin "$version"
 
 The release workflow verifies the tag and package contents, publishes only versions absent from npm, creates the GitHub release, then verifies registry metadata, fresh installation, ESM imports, CLI execution, and the RickyData production service health endpoints.
 
+Publishing uses npm trusted publishing. Each package must authorize the GitHub repository `rickycambrian/rickydata-sdk`, workflow `release.yml`, and environment `npm-production`; no long-lived npm token is stored in GitHub.
+
 Never tag a version already present on npm, publish from the private repository, or copy private Git history into this repository.
