@@ -1,0 +1,180 @@
+import { Command } from 'commander';
+import { ConfigManager } from '../config/config-manager.js';
+import { CredentialStore } from '../config/credential-store.js';
+import { AgentClient } from '../../agent/agent-client.js';
+import { FREE_TIER_MODEL } from '../../agent/types.js';
+import { startChatRepl } from '../chat/chat-repl.js';
+import { fail } from '../errors.js';
+
+function requireAuth(store: CredentialStore, profile: string): string {
+  const cred = store.getToken(profile);
+  if (!cred) {
+    fail('Not authenticated. Run `rickydata auth login` first.');
+  }
+  return cred.token;
+}
+
+/** Fetch the free-tier model from the backend, falling back to the constant. */
+async function getFreeTierModel(client: AgentClient): Promise<string> {
+  try {
+    const ft = await client.getFreeTierStatus();
+    return ft.model || FREE_TIER_MODEL;
+  } catch {
+    return FREE_TIER_MODEL;
+  }
+}
+
+export function defaultModelForProvider(provider: unknown): string {
+  if (provider === 'openrouter') return 'google/gemma-4-26b-a4b-it';
+  if (provider === 'zai') return 'glm-5.1';
+  if (provider === 'deepseek') return 'deepseek-v4-pro';
+  if (provider === 'gemini') return 'gemini-3.1-pro-preview';
+  if (provider === 'kimi') return 'k3[1m]';
+  if (provider === 'opencode') return 'opencode-go/deepseek-v4-flash';
+  return FREE_TIER_MODEL;
+}
+
+async function unlockProviderVaultIfPossible(
+  gatewayUrl: string,
+  token: string,
+  privateKey: string | undefined,
+): Promise<void> {
+  if (!privateKey) return;
+  const { privateKeyToAccount } = await import('viem/accounts');
+  const key = privateKey.startsWith('0x') ? privateKey : `0x${privateKey}`;
+  const account = privateKeyToAccount(key as `0x${string}`);
+
+  const challengeRes = await fetch(`${gatewayUrl}/wallet/provider-vault/derive-challenge`, {
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+  });
+  if (!challengeRes.ok) return;
+  const { message, nonce } = await challengeRes.json() as { message: string; nonce: string };
+  const signature = await account.signMessage({ message });
+
+  await fetch(`${gatewayUrl}/wallet/provider-vault/unlock`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ signature, nonce }),
+  });
+}
+
+/**
+ * Resolve the model to use for chat.
+ *
+ * Priority: explicit flag > wallet plan > API key probe > free-tier default.
+ *
+ * Returns undefined when nothing is explicitly configured — the CLI then sends
+ * no model and the gateway resolves it from wallet settings / evidence routing.
+ *
+ * Critical: the model string must start with 'MiniMax' (title case) for the
+ * backend to route through the free-tier path. Lowercase 'minimax' does NOT work.
+ */
+export async function resolveModel(
+  token: string,
+  gatewayUrl: string,
+  explicitModel: string | undefined,
+): Promise<string | undefined> {
+  if (explicitModel) return explicitModel;
+
+  const client = new AgentClient({ token, gatewayUrl });
+
+  try {
+    const settings = await client.getWalletSettings();
+
+    // Explicit free plan — use the configured model provider (OpenRouter or MiniMax)
+    if (settings.plan === 'free') {
+      if (
+        settings.modelProvider === 'openrouter' ||
+        settings.modelProvider === 'zai' ||
+        settings.modelProvider === 'deepseek' ||
+        settings.modelProvider === 'kimi'
+      ) {
+        return settings.defaultModel || defaultModelForProvider(settings.modelProvider);
+      }
+      if (settings.modelProvider !== 'minimax') {
+        client.updateWalletSettings({ modelProvider: 'minimax', defaultModel: FREE_TIER_MODEL }).catch(() => {});
+      }
+      return await getFreeTierModel(client);
+    }
+
+    // Explicit BYOK plan — no configured default means the gateway resolves
+    if (settings.plan === 'byok') {
+      return settings.defaultModel || undefined;
+    }
+
+    // OpenRouter BYOK plan
+    if (settings.plan === 'openrouter_byok') {
+      return settings.defaultModel || 'google/gemma-4-26b-a4b-it';
+    }
+
+    if (settings.plan === 'zai_byok') {
+      return settings.defaultModel || 'glm-5.1';
+    }
+
+    if (settings.plan === 'deepseek_byok') {
+      return settings.defaultModel || 'deepseek-v4-pro';
+    }
+
+    if (settings.plan === 'gemini_byok') {
+      return settings.defaultModel || 'gemini-3.1-pro-preview';
+    }
+
+    if (settings.plan === 'kimi_byok') {
+      return settings.defaultModel || 'k3[1m]';
+    }
+
+    if (settings.plan === 'opencode_byok') {
+      return settings.defaultModel || 'opencode-go/deepseek-v4-flash';
+    }
+
+    // Plan not set — probe API key to decide
+    try {
+      const keyStatus = await client.getApiKeyStatus();
+      if (keyStatus.configured) {
+        return settings.defaultModel || undefined;
+      }
+    } catch {
+      // API key check failed — fall through to free tier
+    }
+
+    // No plan set + no API key → free tier
+    return await getFreeTierModel(client);
+  } catch {
+    // Wallet settings unavailable — last resort: check API key
+    try {
+      const keyStatus = await client.getApiKeyStatus();
+      if (keyStatus.configured) return undefined;
+    } catch {
+      // Both endpoints failed
+    }
+    return FREE_TIER_MODEL;
+  }
+}
+
+export function createChatCommand(config: ConfigManager, store: CredentialStore): Command {
+  return new Command('chat')
+    .description('Start an interactive chat session with an agent')
+    .argument('<agent-id>', 'Agent ID to chat with')
+    .option('--model <model>', 'Model to use (overrides wallet settings)')
+    .option('--session <id>', 'Resume an existing session')
+    .option('--verbose', 'Show tool call details', false)
+    .option('--profile <profile>', 'Config profile to use')
+    .option('--gateway <url>', 'Override agent gateway URL')
+    .action(async (agentId: string, opts) => {
+      const profile = opts.profile ?? config.getActiveProfile();
+      const gatewayUrl = (opts.gateway ?? config.getAgentGatewayUrl(profile)).replace(/\/$/, '');
+      const token = requireAuth(store, profile);
+
+      const model = await resolveModel(token, gatewayUrl, opts.model);
+      await unlockProviderVaultIfPossible(gatewayUrl, token, store.getPrivateKey(profile) ?? undefined).catch(() => {});
+
+      await startChatRepl({
+        agentId,
+        token,
+        gatewayUrl,
+        model,
+        sessionId: opts.session,
+        verbose: opts.verbose,
+      });
+    });
+}

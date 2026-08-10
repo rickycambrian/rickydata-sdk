@@ -1,0 +1,40 @@
+{
+  "publicRepository": "https://github.com/rickycambrian/rickydata-sdk.git",
+  "sourcePaths": [
+    "LICENSE",
+    "README.md",
+    "package-lock.json",
+    "package.json",
+    "tsconfig.base.json",
+    "turbo.json",
+    "examples",
+    "packages",
+    "docs/KFDB_GETTING_STARTED.md",
+    "docs/contracts",
+    "docs/pr-review-system.md",
+    "docs/sdk-mcp-dynamic-agent-loading.md",
+    "public-release.json",
+    "scripts/check-public-release.mjs"
+  ],
+  "publicOwnedPaths": [
+    ".github",
+    ".gitignore",
+    "CONTRIBUTING.md",
+    "SECURITY.md",
+    "docs/release.md"
+  ],
+  "privateSourcePaths": [
+    "packages/core/tests/public-release-tools.test.ts"
+  ],
+  "publishPackages": [
+    "packages/core",
+    "packages/design-tokens",
+    "packages/auth",
+    "packages/react",
+    "packages/chat",
+    "packages/tailwind-preset",
+    "packages/testing",
+    "packages/trace",
+    "packages/ui"
+  ]
+}

@@ -1,0 +1,853 @@
+/**
+ * Agent Client Type Definitions
+ *
+ * Types for the high-level AgentClient that wraps the Agent Gateway API.
+ */
+
+/** Default model for free-tier users. Must start with 'MiniMax' to match backend routing. */
+export const FREE_TIER_MODEL = 'MiniMax-M2.7' as const;
+export const FREE_TIER_ZAI_MODEL = 'glm-5.1' as const;
+export const FREE_TIER_DEEPSEEK_MODEL = 'deepseek-v4-pro' as const;
+export const GEMINI_MODEL = 'gemini-3.1-pro-preview' as const;
+export const OPENCODE_GO_MODEL = 'opencode-go/deepseek-v4-flash' as const;
+
+export type TeamExecutionEngine = 'claude' | 'openclaude' | 'codex' | 'opencode' | 'hermes' | 'gemini' | 'openrouter-agent' | 'kimi-code' | 'qwen-code' | 'rickydata-code';
+export type MarketplaceProvider = 'anthropic' | 'minimax' | 'openrouter' | 'zai' | 'deepseek' | 'gemini' | 'openai' | 'kimi' | 'qwen' | 'opencode';
+export type WalletPlan = 'free' | 'byok' | 'minimax_byok' | 'openrouter_byok' | 'zai_byok' | 'deepseek_byok' | 'gemini_byok' | 'openai_byok' | 'kimi_byok' | 'opencode_byok';
+export type WalletSignMessage = (message: string) => Promise<string>;
+
+export interface ProviderApiKeyStatus {
+  configured: boolean;
+  persistent?: boolean;
+  encryptionMode?: 'hkdf' | 'sign-to-derive' | 'none' | string | null;
+  unlocked?: boolean;
+  needsMigration?: boolean;
+}
+
+export interface ProviderVaultUnlockResult {
+  success: boolean;
+  unlocked: boolean;
+  unlockedProviders: MarketplaceProvider[];
+  migratedProviders: MarketplaceProvider[];
+  lockedProviders: MarketplaceProvider[];
+  skippedProviders: MarketplaceProvider[];
+  expiresInMs?: number;
+}
+
+// ─── Configuration ──────────────────────────────────────────
+
+export interface AgentClientConfig {
+  /** Private key for wallet-based authentication (0x-prefixed hex). Required unless `token` or `tokenGetter` is provided. */
+  privateKey?: string;
+  /** Pre-existing auth token (wallet-token or JWT). Required unless `privateKey` or `tokenGetter` is provided. */
+  token?: string;
+  /** Async function that returns a token on demand (for browser/React use). */
+  tokenGetter?: (options?: { forceRefresh?: boolean }) => Promise<string | undefined>;
+  /** Optional wallet personal_sign callback used for sign-to-derive unlock/store flows in browser apps. */
+  signMessage?: WalletSignMessage;
+  /** Agent Gateway URL. Defaults to https://agents.rickydata.org */
+  gatewayUrl?: string;
+  /** Path for session store file. Pass `null` for in-memory only (useful in tests). */
+  sessionStorePath?: string | null;
+}
+
+// ─── Agent ──────────────────────────────────────────────────
+
+export interface AgentInfo {
+  id: string;
+  name: string;
+  title: string;
+  description: string;
+  model: string;
+  skillsCount: number;
+}
+
+export interface CustomAgentDefinition {
+  id: string;
+  name: string;
+  title?: string;
+  description?: string;
+  model?: string;
+  category?: string;
+  mcp_servers?: string[];
+  builtin_tools?: string[];
+  systemPrompt?: string;
+  metadata?: Record<string, unknown>;
+}
+
+export interface CustomAgentUpsertResult {
+  agentId: string;
+  agentName?: string;
+  qualityScore?: number;
+}
+
+// ─── Image Attachments ──────────────────────────────────────
+
+export interface ImageAttachment {
+  /** Base64-encoded image data. */
+  data: string;
+  /** MIME type of the image. */
+  mediaType: 'image/jpeg' | 'image/png' | 'image/webp';
+}
+
+// ─── Chat ───────────────────────────────────────────────────
+
+export interface ChatOptions {
+  /** Model to use. Named variants: 'haiku', 'sonnet', 'opus', 'MiniMax-M2.7'. Free tier uses MiniMax. */
+  model?: 'haiku' | 'sonnet' | 'opus' | 'MiniMax-M2.7' | (string & {});
+  /** Reuse an existing session. Auto-creates one if omitted. */
+  sessionId?: string;
+  /** Execution engine to request when the SDK creates a new session. */
+  executionEngine?: TeamExecutionEngine;
+  /** Maximum number of retries on transport/network errors. Defaults to 3. */
+  maxRetries?: number;
+  /** Called for each text chunk streamed from the agent. */
+  onText?: (text: string) => void;
+  /** Called when the agent invokes a tool. */
+  onToolCall?: (tool: { name: string; displayName?: string; args: unknown }) => void;
+  /** Called when a tool returns a result. */
+  onToolResult?: (result: { name: string; result?: string; isError: boolean }) => void;
+}
+
+export interface ChatResult {
+  /** Full accumulated text response. */
+  text: string;
+  /** Session ID (reuse for follow-up messages). */
+  sessionId: string;
+  /** Model reported by the gateway when the turn completed. */
+  model?: string;
+  /** How the gateway resolved the model ('explicit'|'session'|'routing'|'wallet_default'|'provider_default'|'fallback'). */
+  modelSource?: string;
+  /** Requested execution engine for the session/turn. */
+  executionEngine?: TeamExecutionEngine;
+  /** Actual execution engine reported by the gateway for the turn. */
+  engineUsed?: TeamExecutionEngine;
+  /** Codex auth source reported by the gateway for Codex turns. */
+  codexAuthSource?: 'openai_api_key' | 'subscription';
+  /** Total cost in USDC display format (e.g. "$0.014"). */
+  cost?: string;
+  /** Number of MCP tool calls made. */
+  toolCallCount?: number;
+  /** Token usage. */
+  usage?: { inputTokens: number; outputTokens: number };
+}
+
+// ─── Model Guide Specialist ───────────────────────────────
+
+export type ModelGuideSpecialistModel = 'haiku-4.5' | 'codex-5.5';
+
+export interface ModelGuideSpecialistFile {
+  content: string;
+  mimeType?: string;
+}
+
+export interface ModelGuideSpecialistRequest {
+  model: ModelGuideSpecialistModel;
+  prompt: string;
+  files?: ModelGuideSpecialistFile[];
+  skippedCount?: number;
+}
+
+export interface ModelGuideSpecialistEvent {
+  type?: string;
+  message?: string;
+  result?: ModelGuideSpecialistResult;
+  [key: string]: unknown;
+}
+
+export interface ModelGuideSpecialistResult {
+  run_id?: string;
+  text?: string;
+  error?: string | null;
+  provider?: string;
+  model?: string;
+  execution_engine?: string;
+  price_usd?: number;
+  usage?: { inputTokens?: number; outputTokens?: number; input_tokens?: number; output_tokens?: number };
+  tool_call_count?: number;
+  event_count?: number;
+  tee_proof?: {
+    available?: boolean;
+    manifestHash?: string;
+    manifest?: Record<string, unknown>;
+    [key: string]: unknown;
+  };
+}
+
+export interface ModelGuideSpecialistOptions {
+  signal?: AbortSignal;
+  onEvent?: (event: ModelGuideSpecialistEvent) => void;
+}
+
+// ─── Reflect & KB Tools (Builder) ───────────────────────────
+
+export interface ReflectConfig {
+  minConfidence: number;
+  autoShare: boolean;
+  defaultSpace: string;
+}
+
+export interface ReflectStatus {
+  reflectEnabled: boolean;
+  reflectConfig: ReflectConfig;
+  kbAuthConfigured: boolean;
+}
+
+export interface KbToolsStatus {
+  kbToolsEnabled: boolean;
+}
+
+// ─── Agent Builder (recipe-driven provisioning) ─────────────
+
+/**
+ * High-level spec for creating an agent programmatically. The builder maps this
+ * to a {@link CustomAgentDefinition} for `POST /agents/custom`, then runs the
+ * follow-up provisioning steps (skills, claude-md, secrets, kb-tools).
+ *
+ * `name`/`systemPrompt` are the only required fields; everything else is optional
+ * and mirrors the agent definition front-matter documented in the create-flow contract.
+ */
+export interface AgentSpec {
+  /** Slug/base name. Private agents get a `-<6hex>` suffix appended to form the id. */
+  name: string;
+  /** System prompt (the markdown body of an agent.md recipe). */
+  systemPrompt: string;
+  /** Pre-computed id. Defaults to `name` for a first create; the gateway may return a suffixed id. */
+  id?: string;
+  title?: string;
+  description?: string;
+  /** e.g. 'haiku' | 'sonnet' | 'opus' | a named variant. */
+  model?: string;
+  /** Category (JSON `category`, markdown `categories`). */
+  category?: string;
+  /** MCP server ids/names to attach. */
+  mcpServers?: string[];
+  /** Gateway builtin tool names. */
+  builtinTools?: string[];
+  /** Names of agent secrets the agent expects (values supplied separately at deploy time). */
+  agentSecrets?: string[];
+  /** Wallet skill names to upload (resolved to `skills/<name>.md` when deploying a recipe). */
+  skills?: string[];
+  /** 'private' (default) or 'public'. */
+  visibility?: 'private' | 'public';
+  /** Enable gateway-native KnowledgeBook (KFDB) tools after create. */
+  kbTools?: boolean;
+  /** Reflect/KnowledgeBook config to apply after create. */
+  reflect?: { enabled?: boolean; config?: Partial<ReflectConfig> };
+  /** Extra metadata stored on the definition. */
+  metadata?: Record<string, unknown>;
+}
+
+/** A single skill file parsed from a recipe's `skills/` directory. */
+export interface SkillFile {
+  /** Skill name (filename stem, minus the `.md` extension). */
+  name: string;
+  /** Full markdown content of the skill file. */
+  content: string;
+}
+
+/**
+ * A parsed recipe directory: the agent spec (from `agent.md` front-matter + body),
+ * its skill files, and optional per-agent CLAUDE routing.
+ */
+export interface AgentRecipe {
+  /** The agent spec derived from `agent.md`. */
+  spec: AgentSpec;
+  /** Skill files from `skills/*.md`. */
+  skills: SkillFile[];
+  /** Raw content of `claude-routing.md`, if present. */
+  claudeRouting?: string;
+}
+
+/** Result of a create / deploy run. Records each provisioning step that ran. */
+export interface CreateResult {
+  /** The agent id returned by the gateway (may carry a `-<6hex>` suffix). */
+  agentId: string;
+  agentName?: string;
+  qualityScore?: number;
+  /** Skill names successfully uploaded. */
+  uploadedSkills: string[];
+  /** Whether per-agent CLAUDE routing was uploaded. */
+  claudeRoutingUploaded: boolean;
+  /** Agent-secret names that were set. */
+  agentSecretsSet: string[];
+  /** MCP server ids that had secrets set. */
+  mcpSecretsSet: string[];
+  /** Whether KnowledgeBook tools were enabled. */
+  kbToolsEnabled: boolean;
+  /** Whether reflect config was applied. */
+  reflectConfigured: boolean;
+}
+
+/** Outcome of {@link AgentBuilder.verify}: the live state of a provisioned agent. */
+export interface VerifyResult {
+  agentId: string;
+  /** Whether `GET /agents/custom/{id}` returned the agent. */
+  exists: boolean;
+  /** Skill names reported by the wallet skills listing for this agent. */
+  skills: string[];
+  /** MCP tool names exposed via `tools/list` on the agent MCP endpoint. */
+  tools: string[];
+  /** Per-server secret requirements (from `/agents/{id}/mcp-requirements`). */
+  mcpRequirements?: McpRequirementsResponse;
+  /** Agent-level secret status. */
+  secretStatus?: AgentSecretStatus;
+  /** KnowledgeBook tools enabled flag. */
+  kbToolsEnabled?: boolean;
+  /** Reflect status (includes `kbAuthConfigured`). */
+  reflect?: ReflectStatus;
+}
+
+// ─── SSE Events (from Agent Gateway) ────────────────────────
+
+export interface SSETextEvent {
+  type: 'text';
+  data: string;
+}
+
+export interface SSEToolCallEvent {
+  type: 'tool_call';
+  data: { name: string; displayName?: string; args: unknown; id?: string };
+}
+
+export interface SSEToolResultEvent {
+  type: 'tool_result';
+  data: { id?: string; name: string; isError: boolean; result?: string; content?: string };
+}
+
+export interface SSEDoneEvent {
+  type: 'done';
+  data: {
+    model?: string;
+    /**
+     * How the gateway resolved the model for this turn. 'exploration' is a
+     * wallet-default turn that auto-routing deliberately held out so
+     * single-arm benchmark evidence keeps flowing.
+     */
+    modelSource?: 'explicit' | 'session' | 'routing' | 'exploration' | 'wallet_default' | 'provider_default' | 'fallback' | (string & {});
+    executionEngine?: TeamExecutionEngine;
+    engineUsed?: TeamExecutionEngine;
+    cost?: string;
+    costRaw?: string;
+    balanceRemaining?: string;
+    usage?: { inputTokens: number; outputTokens: number };
+    toolCallCount?: number;
+    codexAuthSource?: 'openai_api_key' | 'subscription';
+  };
+}
+
+export interface SSEErrorEvent {
+  type: 'error';
+  data: { code?: string; message: string };
+}
+
+export interface SSEThinkingEvent {
+  type: 'thinking';
+  data: string;
+}
+
+export interface SSEPlanningEvent {
+  type: 'planning';
+  data: string;
+}
+
+export interface SSEStatusEvent {
+  type: 'status';
+  data: { code?: string; message?: string; [key: string]: unknown };
+}
+
+export interface SSEToolApprovalRequestEvent {
+  type: 'tool_approval_request';
+  data: {
+    approvalId: string;
+    toolName: string;
+    args: unknown;
+    description?: string;
+    timeoutMs?: number;
+  };
+}
+
+export interface SSETransactionSigningRequestEvent {
+  type: 'transaction_signing_request';
+  data: {
+    approvalId: string;
+    description: string;
+    toolName: string;
+    metadata?: Record<string, unknown>;
+    timeoutMs: number;
+  };
+}
+
+export type SSEEvent =
+  | SSETextEvent
+  | SSEToolCallEvent
+  | SSEToolResultEvent
+  | SSEDoneEvent
+  | SSEErrorEvent
+  | SSEThinkingEvent
+  | SSEPlanningEvent
+  | SSEStatusEvent
+  | SSEToolApprovalRequestEvent
+  | SSETransactionSigningRequestEvent;
+
+// ─── Agent MCP Client ──────────────────────────────────────
+
+export interface AgentMCPClientConfig {
+  /** Agent Gateway URL. Defaults to https://agents.rickydata.org */
+  baseUrl?: string;
+  /** Private key for wallet-based authentication (0x-prefixed hex). */
+  privateKey?: string;
+  /** Pre-existing auth token (wallet-token or JWT). */
+  token?: string;
+}
+
+export interface MCPTool {
+  name: string;
+  description?: string;
+  inputSchema?: Record<string, unknown>;
+}
+
+export interface MCPToolResult {
+  content: Array<{ type: string; text: string }>;
+  isError?: boolean;
+}
+
+export interface MCPServerInfo {
+  protocolVersion: string;
+  capabilities: Record<string, unknown>;
+  serverInfo: { name: string; version: string };
+}
+
+// ─── Agent Detail ───────────────────────────────────────────
+
+export interface AgentDetailResponse {
+  id: string;
+  name: string;
+  title: string;
+  description: string;
+  model: string;
+  tools: string[];
+  toolsCount?: number;
+  skills: Array<{ name: string; title: string; description: string }>;
+  skillsCount?: number;
+  categories?: string[];
+  mcpServers?: string[];
+  pricing?: {
+    type: string;
+    amount: string;
+    currency: string;
+    description: string;
+  };
+}
+
+// ─── Sessions ───────────────────────────────────────────────
+
+export interface SessionCreateResponse {
+  id: string;
+  agentId: string;
+  model: string;
+  /**
+   * How the gateway resolved the session model. Not emitted by session
+   * creation yet — routing resolution (and its modelSource) happens per turn
+   * on the done SSE event.
+   */
+  modelSource?: string;
+  createdAt: string;
+  executionEngine?: TeamExecutionEngine;
+}
+
+export interface SessionListEntry {
+  id: string;
+  agentId: string;
+  model: string;
+  createdAt: string;
+  lastActiveAt?: string;
+  lastMessageAt?: string;
+  messageCount?: number;
+  preview?: string;
+  persisted?: boolean;
+}
+
+export interface SessionDetail {
+  id: string;
+  agentId: string;
+  model: string;
+  executionEngine?: TeamExecutionEngine;
+  messages: Array<{
+    role: 'user' | 'assistant';
+    content: string;
+    timestamp?: string;
+  }>;
+  createdAt: string;
+  lastActiveAt?: string;
+}
+
+// ─── Secrets ────────────────────────────────────────────────
+
+export interface ServerRequirement {
+  serverId: string;
+  name: string;
+  required: string[];
+  optional?: string[];
+  configured?: string[];
+  missing?: string[];
+}
+
+export interface McpRequirementsResponse {
+  agentId: string;
+  servers: ServerRequirement[];
+  totalRequired: number;
+}
+
+export interface AgentSecretStatus {
+  configuredSecrets: string[];
+  missingRequired: string[];
+  ready: boolean;
+}
+
+export interface CodexAuthStatus {
+  configured: boolean;
+  authMode?: string;
+  hasTokens?: boolean;
+  hasOpenAIApiKey?: boolean;
+  updatedAt?: string;
+  encryptionMode?: 'sign-to-derive' | 'legacy-plaintext' | 'none' | string;
+  persistent?: boolean;
+  unlocked?: boolean;
+  needsMigration?: boolean;
+}
+
+/**
+ * Anthropic (Claude Code) OAuth credential bundle uploaded to the gateway vault.
+ *
+ * Mirrors the canonical `claudeAiOauth` credential shape that Claude Code itself
+ * persists (see `~/.claude/.credentials.json`), so the gateway can reuse standard
+ * Anthropic OAuth token-refresh logic. This is the SHARED CONTRACT with the gateway
+ * repo for `POST /wallet/anthropic-oauth`.
+ */
+export interface AnthropicOAuthBundle {
+  claudeAiOauth: {
+    /** OAuth access token (`sk-ant-oat...`). NEVER logged or written to disk in plaintext. */
+    accessToken: string;
+    /** OAuth refresh token (`sk-ant-ort...`). */
+    refreshToken: string;
+    /** Absolute expiry as epoch milliseconds. */
+    expiresAt: number;
+    /** Granted scopes, e.g. ['org:create_api_key','user:profile','user:inference','user:sessions:claude_code']. */
+    scopes: string[];
+    /** Subscription tier when known (e.g. 'pro', 'max'); omitted otherwise. */
+    subscriptionType?: string;
+  };
+}
+
+/** Wallet-scoped status of a stored Anthropic OAuth credential (no token text). */
+export interface AnthropicOAuthStatus {
+  configured: boolean;
+  hasTokens?: boolean;
+  hasRefreshToken?: boolean;
+  scopes?: string[];
+  expiresAt?: number;
+  subscriptionType?: string;
+  updatedAt?: string;
+  encryptionMode?: 'sign-to-derive' | 'legacy-plaintext' | 'none' | string;
+  persistent?: boolean;
+  unlocked?: boolean;
+  needsMigration?: boolean;
+}
+
+// ─── Wallet ─────────────────────────────────────────────────
+
+export interface WalletSettings {
+  defaultModel?: string;
+  defaultVoiceModel?: string;
+  persistConversations?: boolean;
+  conversationRetentionDays?: number;
+  favoriteAgentIds?: string[];
+  groupConversations?: GroupConversationMeta[];
+  kfdbTenantId?: string;
+  kfdbApiKey?: string;
+  plan?: WalletPlan;
+  modelProvider?: MarketplaceProvider | (string & {});
+  anthropicApiKeyConfigured?: boolean;
+  minimaxApiKeyConfigured?: boolean;
+  openrouterApiKeyConfigured?: boolean;
+  zaiApiKeyConfigured?: boolean;
+  deepseekApiKeyConfigured?: boolean;
+  geminiApiKeyConfigured?: boolean;
+  kimiApiKeyConfigured?: boolean;
+  opencodeApiKeyConfigured?: boolean;
+  teamEngine?: TeamExecutionEngine;
+  executionEngine?: TeamExecutionEngine;
+  engineUsed?: TeamExecutionEngine;
+  /** Evidence-routing mode for model resolution when no model is sent. */
+  routingMode?: 'off' | 'advisory' | 'approval' | 'auto';
+  /** Approved bench config name used by evidence routing. */
+  routingApprovedConfig?: string;
+  enabledProviders?: MarketplaceProvider[];
+  onboardingComplete?: boolean;
+  autoImprove?: boolean;
+  [key: string]: unknown;
+}
+
+export interface FreeTierStatus {
+  plan: 'free';
+  dailyLimit: number;
+  dailyUsed: number;
+  dailyRemaining: number;
+  resetsAt: string;
+  model: string;
+}
+
+export interface GroupConversationMeta {
+  groupId: string;
+  groupName: string;
+  participantIds: string[];
+  participantNames: string[];
+  orchestratorPrompt: string;
+  orchestratorModel: string;
+  lastMessage: string;
+  lastMessageAt: string;
+  messageCount: number;
+  kfdbSessionId?: string;
+}
+
+export interface WalletBalanceResponse {
+  availableBalance: string;
+  unifiedDepositAddress: string;
+  agentSpends: Record<string, { totalSpent: string }>;
+  depositInstructions?: {
+    network?: string;
+    chainId?: number;
+    chainName?: string;
+    token?: string;
+    tokenAddress?: string;
+    decimals?: number;
+    minimumDeposit?: string;
+    warning?: string;
+  };
+}
+
+export interface WalletTransactionsResponse {
+  transactions: Array<{
+    id: string;
+    type: string;
+    amount: string;
+    agentId?: string;
+    timestamp: string;
+  }>;
+  total: number;
+}
+
+// ─── Voice ──────────────────────────────────────────────────
+
+export interface VoiceTokenResponse {
+  token: string;
+  tools: number;
+  toolDefinitions?: Array<{ type: string; name: string; description?: string; parameters?: unknown }>;
+  model: string;
+  voice: string;
+}
+
+export interface VoiceLivekitTokenResponse {
+  token: string;
+  url: string;
+  roomName: string;
+  sessionId: string;
+  agentGatewayUrl?: string;
+  executionEngine?: TeamExecutionEngine;
+  provider?: 'livekit';
+  tts?: {
+    provider: 'cartesia' | 'gemini-live';
+    model?: string;
+    voice?: string;
+  };
+  narrator?: {
+    enabled: boolean;
+    parallel: boolean;
+    provider: string;
+    model: string;
+    displayName: string;
+    strategy?: string;
+    configured?: boolean;
+  };
+}
+
+export interface VoiceLivekitTokenRequest {
+  voice?: string;
+  model?: string;
+  resumeSessionId?: string;
+  executionEngine?: TeamExecutionEngine;
+  ttsProvider?: 'cartesia' | 'gemini-live';
+  ttsModel?: string;
+  ttsVoice?: string;
+  narratorEnabled?: boolean;
+  parallelNarrator?: boolean;
+}
+
+export interface VoiceToolCallRequest {
+  toolName: string;
+  arguments: Record<string, unknown>;
+  callId: string;
+  sessionId?: string;
+}
+
+export interface VoiceToolCallResponse {
+  callId: string;
+  result: unknown;
+  success: boolean;
+}
+
+export interface VoiceEndResponse {
+  platformFee: string;
+  platformFeeUsd: string;
+  toolCallCount: number;
+  durationMs: number;
+}
+
+// ─── Team Workflow ──────────────────────────────────────────
+
+export interface TeamWorkflowNode {
+  id: string;
+  type: string;
+  data: Record<string, unknown>;
+}
+
+export interface TeamWorkflowConnection {
+  source: string;
+  target: string;
+}
+
+export interface TeamWorkflowTeammate {
+  nodeId: string;
+  teammateName: string;
+  sourceType: 'standard' | 'marketplace';
+  sourceAgentId?: string;
+  rolePrompt?: string;
+  model?: string;
+}
+
+export interface TeamWorkflowPayload {
+  nodes: TeamWorkflowNode[];
+  connections: TeamWorkflowConnection[];
+  teamRuntime: {
+    orchestratorNodeId: string;
+    teammates: TeamWorkflowTeammate[];
+  };
+}
+
+export type TeamSSEEventType =
+  | 'run_started'
+  | 'run_completed'
+  | 'run_failed'
+  | 'team_agent_event'
+  | 'text'
+  | 'tool_call'
+  | 'tool_result'
+  | 'done'
+  | 'error';
+
+export interface TeamSSEEvent {
+  type: TeamSSEEventType;
+  data: Record<string, unknown>;
+}
+
+export interface TeamWorkflowOptions {
+  /** Timeout in milliseconds. Defaults to 300_000 (5 minutes). */
+  timeoutMs?: number;
+  /** Optional external AbortSignal. */
+  signal?: AbortSignal;
+}
+
+// ─── Error Taxonomy ─────────────────────────────────────────
+
+export enum AgentErrorCode {
+  // Authentication
+  AUTH_REQUIRED = 'AUTH_REQUIRED',
+  AUTH_EXPIRED = 'AUTH_EXPIRED',
+  AUTH_FAILED = 'AUTH_FAILED',
+
+  // Network / Transport
+  NETWORK_ERROR = 'NETWORK_ERROR',
+  NETWORK_TIMEOUT = 'NETWORK_TIMEOUT',
+  CONNECTION_INTERRUPTED = 'CONNECTION_INTERRUPTED',
+
+  // Server
+  SERVER_ERROR = 'SERVER_ERROR',
+  RATE_LIMITED = 'RATE_LIMITED',
+  NOT_FOUND = 'NOT_FOUND',
+
+  // Client / Validation
+  VALIDATION_ERROR = 'VALIDATION_ERROR',
+
+  // Agent / Tool
+  AGENT_ERROR = 'AGENT_ERROR',
+  TOOL_ERROR = 'TOOL_ERROR',
+
+  // Parse
+  PARSE_ERROR = 'PARSE_ERROR',
+}
+
+export interface AgentErrorContext {
+  agentId?: string;
+  sessionId?: string;
+  operation?: string;
+  statusCode?: number;
+}
+
+const RETRYABLE_CODES = new Set<AgentErrorCode>([
+  AgentErrorCode.AUTH_EXPIRED,
+  AgentErrorCode.NETWORK_ERROR,
+  AgentErrorCode.NETWORK_TIMEOUT,
+  AgentErrorCode.CONNECTION_INTERRUPTED,
+  AgentErrorCode.SERVER_ERROR,
+  AgentErrorCode.RATE_LIMITED,
+]);
+
+export class AgentError extends Error {
+  readonly code: AgentErrorCode;
+  readonly isRetryable: boolean;
+  readonly context?: AgentErrorContext;
+
+  constructor(code: AgentErrorCode, message: string, context?: AgentErrorContext) {
+    super(message);
+    this.name = 'AgentError';
+    this.code = code;
+    this.isRetryable = RETRYABLE_CODES.has(code);
+    this.context = context;
+  }
+
+  static fromHttpStatus(status: number, body: string, context?: AgentErrorContext): AgentError {
+    if (status === 401) {
+      return new AgentError(AgentErrorCode.AUTH_EXPIRED, body || 'Authentication expired', { ...context, statusCode: status });
+    }
+    if (status === 402) {
+      // 402 = insufficient balance — same error code as 429 for client handling,
+      // but NOT retryable (requires user to deposit funds, unlike transient 429)
+      const err = new AgentError(AgentErrorCode.RATE_LIMITED, body || 'Insufficient balance', { ...context, statusCode: status });
+      (err as { isRetryable: boolean }).isRetryable = false;
+      return err;
+    }
+    if (status === 404) {
+      return new AgentError(AgentErrorCode.NOT_FOUND, body || 'Not found', { ...context, statusCode: status });
+    }
+    if (status === 429) {
+      return new AgentError(AgentErrorCode.RATE_LIMITED, body || 'Rate limited', { ...context, statusCode: status });
+    }
+    if (status >= 500) {
+      return new AgentError(AgentErrorCode.SERVER_ERROR, body || `Server error ${status}`, { ...context, statusCode: status });
+    }
+    return new AgentError(AgentErrorCode.VALIDATION_ERROR, body || `Request failed: ${status}`, { ...context, statusCode: status });
+  }
+}
+
+// ─── Connect Wizard Types ──────────────────────────────────────────
+
+export interface ConnectWizardStep {
+  step: 'credentials' | 'verify' | 'two_factor' | 'select_groups' | 'processing';
+  status: 'pending' | 'active' | 'completed' | 'error';
+}
+
+export interface TelegramConnectConfig {
+  apiBaseUrl: string;
+  serverId: string;
+}

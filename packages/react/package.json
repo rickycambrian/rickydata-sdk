@@ -1,0 +1,53 @@
+{
+  "name": "@rickydata/react",
+  "version": "0.1.14",
+  "description": "React hooks, providers, and components for the rickydata Agent Gateway SDK",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/rickycambrian/rickydata-sdk.git",
+    "directory": "packages/react"
+  },
+  "bugs": {
+    "url": "https://github.com/rickycambrian/rickydata-sdk/issues"
+  },
+  "type": "module",
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsup src/index.ts --format cjs,esm --dts --clean --external react --external react-dom --external @tanstack/react-query --external rickydata --external livekit-client",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit",
+    "clean": "rm -rf dist"
+  },
+  "peerDependencies": {
+    "@tanstack/react-query": "^5.0.0",
+    "livekit-client": "^2.9.0",
+    "react": "^18.0.0 || ^19.0.0",
+    "rickydata": ">=1.6.0"
+  },
+  "devDependencies": {
+    "@tanstack/react-query": "^5.0.0",
+    "@testing-library/react": "^16.0.0",
+    "@types/react": "^18.2.0",
+    "jsdom": "^24.0.0",
+    "livekit-client": "^2.17.3",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0",
+    "rickydata": "*",
+    "tsup": "^8.0.0",
+    "typescript": "^5.3.0",
+    "vitest": "^2.0.0"
+  },
+  "license": "MIT"
+}

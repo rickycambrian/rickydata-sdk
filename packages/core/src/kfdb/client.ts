@@ -1,0 +1,906 @@
+import type {
+  AutoDeriveOptions,
+  DeriveChallenge,
+  DeriveKeyResult,
+  DeriveSessionStore,
+  KfdbBatchGetEntitiesRequest,
+  KfdbBatchGetEntitiesResponse,
+  KfdbClientConfig,
+  KfdbEntityResponse,
+  KfdbFilterEntitiesRequest,
+  KfdbGetEntityOptions,
+  KfdbListEntitiesOptions,
+  KfdbListEntitiesResponse,
+  KfdbListEntityChangesOptions,
+  KfdbListEntityChangesResponse,
+  KfdbAckEntityChangesResponse,
+  KfdbListLabelsResponse,
+  KfdbKnowledgeBundleRequest,
+  KfdbKnowledgeBundleResponse,
+  KfdbExplainResponse,
+  KfdbCreateSharedNotebookRequest,
+  KfdbEnrollSharingKeyRequest,
+  KfdbListSharedNotebookGroupKeysResponse,
+  KfdbListSharedNotebookMembersResponse,
+  KfdbListSharedNotebooksResponse,
+  KfdbListSharingKeysResponse,
+  KfdbQueryOptions,
+  KfdbQueryResponse,
+  KfdbQueryScope,
+  KfdbResponseMeta,
+  KfdbReadSessionOptions,
+  KfdbSemanticSearchRequest,
+  KfdbSemanticSearchResponse,
+  KfdbEmbedEntityRequest,
+  KfdbEmbedEntityResponse,
+  KfdbEmbedEntitiesBatchRequest,
+  KfdbEmbedEntitiesBatchResponse,
+  KfdbDeleteEntityEmbeddingRequest,
+  KfdbDeleteEntityEmbeddingResponse,
+  KfdbShareNotebookRequest,
+  KfdbShareNotebookResponse,
+  KfdbSharingKey,
+  KfdbSharedNotebook,
+  KfdbSharedNotebookGroupKey,
+  KfdbSharedNotebookWriteResponse,
+  KfdbUpdateSharedNotebookRequest,
+  KfdbUpsertSharedNotebookGroupKeyRequest,
+  KfdbWriteRequest,
+  KfdbWriteResponse,
+  KfdbImmutableClaimResponse,
+  KfdbImmutableValueResponse,
+} from './types.js';
+import { KfdbEntityNotFoundError, KfdbHttpError } from './errors.js';
+import { KfdbReadSession } from './read-session.js';
+import { deriveKeyFromSignature, encryptProperties, decryptResponseRows } from '../encryption.js';
+import { buildAgentChatTraceOperations, type AgentChatTurnTrace } from './agent-chat-trace.js';
+import { buildClaudeCodeHookTraceOperations, type ClaudeCodeHookTrace } from './claude-code-hook-trace.js';
+import { buildCodexHookTraceOperations, type CodexHookTrace } from './codex-hook-trace.js';
+import { buildHermesHookTraceOperations, type HermesHookTrace } from './hermes-hook-trace.js';
+import { buildRickydataGraphWriteRequest, type RickydataGraphWriteInput } from './rickydata-graph.js';
+
+function normalizeKfdbExpiresAt(raw: number): number {
+  return raw < 10_000_000_000 ? raw * 1000 : raw;
+}
+
+function responseHeader(res: Response, name: string): string | undefined {
+  const value = res.headers?.get(name)?.trim();
+  return value || undefined;
+}
+
+function parseDuration(raw: string | undefined): number | undefined {
+  if (!raw) return undefined;
+  const parsed = Number(raw.replace(/ms$/i, '').trim());
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : undefined;
+}
+
+function serverTimingDuration(raw: string | undefined): number | undefined {
+  if (!raw) return undefined;
+  const timings = raw.split(',').flatMap((entry) => {
+    const [name = '', ...params] = entry.trim().split(';');
+    const duration = params
+      .map((part) => /^dur=(.+)$/i.exec(part.trim())?.[1])
+      .map(parseDuration)
+      .find((value) => value !== undefined);
+    return duration === undefined ? [] : [{ name: name.toLowerCase(), duration }];
+  });
+  for (const preferred of ['total', 'app', 'request', 'kfdb']) {
+    const match = timings.find((timing) => timing.name === preferred);
+    if (match) return match.duration;
+  }
+  return timings.length > 0 ? Math.max(...timings.map((timing) => timing.duration)) : undefined;
+}
+
+function responseMeta(res: Response): Pick<KfdbResponseMeta, 'requestId' | 'backend' | 'serverTiming' | 'serverMs'> {
+  const serverTiming = responseHeader(res, 'server-timing');
+  const serverMs = parseDuration(responseHeader(res, 'x-kfdb-duration-ms'))
+    ?? parseDuration(responseHeader(res, 'x-response-time'))
+    ?? serverTimingDuration(serverTiming);
+  return {
+    ...(responseHeader(res, 'x-request-id') ? { requestId: responseHeader(res, 'x-request-id') } : {}),
+    ...(responseHeader(res, 'x-kfdb-backend') ? { backend: responseHeader(res, 'x-kfdb-backend') } : {}),
+    ...(serverTiming ? { serverTiming } : {}),
+    ...(serverMs !== undefined ? { serverMs } : {}),
+  };
+}
+
+export class KFDBClient {
+  private readonly baseUrl: string;
+  private readonly token?: string;
+  private readonly apiKey?: string;
+  private readonly defaultReadScope: KfdbQueryScope;
+  private readonly encryptionKey?: CryptoKey;
+  private readonly walletAddress?: string;
+  private readonly onResponseMeta?: (meta: KfdbResponseMeta) => void;
+  private readonly clientId?: string;
+  private deriveSessionId: string | null = null;
+  private deriveKeyHex: string | null = null;
+  private deriveExpiresAt: number | null = null;
+
+  // Auto-derive state
+  private deriveSignFn: ((typedData: Record<string, unknown>) => Promise<string>) | null = null;
+  private deriveStore: DeriveSessionStore | null = null;
+  private deriveRefreshMarginMs = 60_000;
+  private derivePromise: Promise<void> | null = null;
+
+  constructor(config: KfdbClientConfig) {
+    this.baseUrl = config.baseUrl.replace(/\/$/, '');
+    this.token = config.token;
+    this.apiKey = config.apiKey;
+    this.defaultReadScope = config.defaultReadScope ?? 'global';
+    this.encryptionKey = config.encryptionKey;
+    this.walletAddress = config.walletAddress;
+    this.onResponseMeta = config.onResponseMeta;
+    this.clientId = config.clientId?.trim() || undefined;
+
+    if (!this.token && !this.apiKey) {
+      throw new Error('KFDBClient requires either token or apiKey');
+    }
+  }
+
+  /**
+   * One-call sign-to-derive setup.
+   *
+   * Orchestrates the full S2D flow against the KFDB derive endpoints:
+   * 1. Check session store cache (if provided) — hot path: 0 HTTP calls
+   * 2. POST /api/v1/auth/derive-challenge → { challenge_id, typed_data }
+   * 3. Sign EIP-712 typed data via the provided signFn
+   * 4. POST /api/v1/auth/derive-key → { session_id, expires_at }
+   * 5. Derive key locally: SHA-256(signature_bytes)
+   * 6. Store session and enable auto-refresh on expiry
+   *
+   * After calling autoDerive(), all subsequent requests automatically
+   * include S2D headers. When the session approaches expiry, the next
+   * request re-derives transparently.
+   *
+   * @param signTypedData - Signs EIP-712 typed data, returns hex signature
+   * @param options - Optional session store for caching + refresh margin
+   *
+   * @example
+   * ```ts
+   * const kfdb = new KFDBClient({ baseUrl, apiKey, walletAddress });
+   * await kfdb.autoDerive(
+   *   (typedData) => wallet.signTypedData(typedData),
+   *   { sessionStore: new FileDeriveSessionStore('~/.rickydata/derive-session.json') },
+   * );
+   * // All reads/writes now use user-controlled encryption
+   * ```
+   */
+  async autoDerive(
+    signTypedData: (typedData: Record<string, unknown>) => Promise<string>,
+    options?: AutoDeriveOptions,
+  ): Promise<void> {
+    if (!this.walletAddress) {
+      throw new Error('autoDerive requires walletAddress in KfdbClientConfig');
+    }
+
+    this.deriveSignFn = signTypedData;
+    this.deriveStore = options?.sessionStore ?? null;
+    this.deriveRefreshMarginMs = options?.refreshMarginMs ?? 60_000;
+
+    // Try cached session first
+    if (this.deriveStore) {
+      const cached = await this.deriveStore.get(this.walletAddress);
+      if (cached && Date.now() < cached.expiresAt - this.deriveRefreshMarginMs) {
+        this.deriveSessionId = cached.sessionId;
+        this.deriveKeyHex = cached.keyHex;
+        this.deriveExpiresAt = cached.expiresAt;
+        return;
+      }
+    }
+
+    await this.performDerive();
+  }
+
+  /**
+   * Set derive session credentials for user-controlled encryption.
+   * When set, X-Derive-Session-Id and X-Derive-Key headers are sent
+   * with all subsequent requests, enabling server-side user-key decryption.
+   */
+  setDeriveSession(sessionId: string, derivedKeyHex: string): void {
+    this.deriveSessionId = sessionId;
+    this.deriveKeyHex = derivedKeyHex;
+  }
+
+  /**
+   * Clear derive session credentials.
+   * Subsequent requests will not include derive session headers.
+   */
+  clearDeriveSession(): void {
+    this.deriveSessionId = null;
+    this.deriveKeyHex = null;
+    this.deriveExpiresAt = null;
+    this.deriveSignFn = null;
+    this.deriveStore = null;
+  }
+
+  withScope(scope: KfdbQueryScope): KFDBClient {
+    const scoped = new KFDBClient({
+      baseUrl: this.baseUrl,
+      token: this.token,
+      apiKey: this.apiKey,
+      defaultReadScope: scope,
+      encryptionKey: this.encryptionKey,
+      walletAddress: this.walletAddress,
+      onResponseMeta: this.onResponseMeta,
+    });
+    scoped.deriveSessionId = this.deriveSessionId;
+    scoped.deriveKeyHex = this.deriveKeyHex;
+    scoped.deriveExpiresAt = this.deriveExpiresAt;
+    scoped.deriveSignFn = this.deriveSignFn;
+    scoped.deriveStore = this.deriveStore;
+    scoped.deriveRefreshMarginMs = this.deriveRefreshMarginMs;
+    return scoped;
+  }
+
+  /** Create an explicit request-scoped read plan with promise coalescing. */
+  readSession(options: KfdbReadSessionOptions = {}): KfdbReadSession {
+    return new KfdbReadSession(this, options);
+  }
+
+  /** Fetch the authenticated, tenant-private server-compiled knowledge corpus. */
+  async getKnowledgeBundle(options: KfdbKnowledgeBundleRequest = {}): Promise<KfdbKnowledgeBundleResponse> {
+    const payload = Object.fromEntries(Object.entries({
+      exhaustive: options.exhaustive,
+      scan_page_size: options.scanPageSize,
+      scan_limit: options.scanLimit,
+      token_budget: (options.tokenBudget),
+      page_limit: options.pageLimit,
+      claim_limit: options.claimLimit,
+      question_limit: options.questionLimit,
+    }).filter(([, value]) => value !== undefined));
+    const res = await this.request('/api/v1/agent/knowledge', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+      signal: options.signal,
+    });
+    return this.parseJson<KfdbKnowledgeBundleResponse>(res, 'get knowledge bundle');
+  }
+
+  async listLabels(scope?: KfdbQueryScope): Promise<KfdbListLabelsResponse> {
+    const resolvedScope = this.resolveScope(scope);
+    const res = await this.request(`/api/v1/entities/labels?scope=${resolvedScope}`);
+    return this.parseJson<KfdbListLabelsResponse>(res, 'list labels');
+  }
+
+  async listEntities(label: string, options: KfdbListEntitiesOptions = {}): Promise<KfdbListEntitiesResponse> {
+    const params = new URLSearchParams();
+    params.set('scope', this.resolveScope(options.scope));
+    if (options.limit != null) params.set('limit', String(options.limit));
+    if (options.offset != null) params.set('offset', String(options.offset));
+    if (options.sortBy) params.set('sort_by', options.sortBy);
+    if (options.sortOrder) params.set('sort_order', options.sortOrder);
+    if (options.includeEmbeddings != null) params.set('include_embeddings', String(options.includeEmbeddings));
+    if (options.fields?.length) params.set('fields', options.fields.join(','));
+
+    const encodedLabel = encodeURIComponent(label);
+    const res = await this.request(`/api/v1/entities/${encodedLabel}?${params.toString()}`, { signal: options.signal });
+    const data = await this.parseJson<KfdbListEntitiesResponse>(res, 'list entities');
+    if (this.encryptionKey && data.items.length > 0) {
+      data.items = await decryptResponseRows(this.encryptionKey, data.items);
+    }
+    return data;
+  }
+
+  async getEntity(label: string, id: string, options: KfdbGetEntityOptions = {}): Promise<KfdbEntityResponse> {
+    const params = new URLSearchParams();
+    params.set('scope', this.resolveScope(options.scope));
+    if (options.includeEmbeddings != null) params.set('include_embeddings', String(options.includeEmbeddings));
+
+    const encodedLabel = encodeURIComponent(label);
+    const encodedId = encodeURIComponent(id);
+    const res = await this.request(`/api/v1/entities/${encodedLabel}/${encodedId}?${params.toString()}`, { signal: options.signal });
+    const data = await this.parseJson<KfdbEntityResponse>(res, 'get entity', { entity: { label, id } });
+    if (this.encryptionKey) {
+      const [decrypted] = await decryptResponseRows(this.encryptionKey, [data.properties]);
+      data.properties = decrypted;
+    }
+    return data;
+  }
+
+  async filterEntities(label: string, request: KfdbFilterEntitiesRequest): Promise<KfdbListEntitiesResponse> {
+    const encodedLabel = encodeURIComponent(label);
+    const payload = {
+      scope: this.resolveScope(request.scope),
+      filters: request.filters ?? {},
+      limit: request.limit,
+      offset: request.offset,
+      sort_by: request.sortBy,
+      sort_order: request.sortOrder,
+      include_embeddings: request.includeEmbeddings,
+    };
+
+    const res = await this.request(`/api/v1/entities/${encodedLabel}/filter`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    const data = await this.parseJson<KfdbListEntitiesResponse>(res, 'filter entities');
+    if (this.encryptionKey && data.items.length > 0) {
+      data.items = await decryptResponseRows(this.encryptionKey, data.items);
+    }
+    return data;
+  }
+
+  async batchGetEntities(request: KfdbBatchGetEntitiesRequest): Promise<KfdbBatchGetEntitiesResponse> {
+    const payload = {
+      scope: this.resolveScope(request.scope),
+      entities: request.entities,
+      include_embeddings: request.includeEmbeddings,
+    };
+
+    const res = await this.request('/api/v1/entities/batch', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+      signal: request.signal,
+    });
+    const data = await this.parseJson<KfdbBatchGetEntitiesResponse>(res, 'batch get entities');
+    if (this.encryptionKey) {
+      const entries = Object.entries(data.entities);
+      if (entries.length > 0) {
+        const props = entries.map(([, v]) => v);
+        const decrypted = await decryptResponseRows(this.encryptionKey, props);
+        for (let i = 0; i < entries.length; i++) {
+          data.entities[entries[i][0]] = decrypted[i];
+        }
+      }
+    }
+    return data;
+  }
+
+  async listEntityChanges(
+    options: KfdbListEntityChangesOptions = {},
+  ): Promise<KfdbListEntityChangesResponse> {
+    const params = new URLSearchParams();
+    if (options.limit != null) params.set('limit', String(options.limit));
+    const suffix = params.size > 0 ? `?${params.toString()}` : '';
+    const res = await this.request(`/api/v1/entities/changes${suffix}`, {
+      signal: options.signal,
+    });
+    return this.parseJson<KfdbListEntityChangesResponse>(res, 'list entity changes');
+  }
+
+  async ackEntityChanges(eventIds: string[]): Promise<KfdbAckEntityChangesResponse> {
+    const res = await this.request('/api/v1/entities/changes/ack', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ event_ids: eventIds }),
+    });
+    return this.parseJson<KfdbAckEntityChangesResponse>(res, 'ack entity changes');
+  }
+
+  async write(request: KfdbWriteRequest): Promise<KfdbWriteResponse> {
+    if (this.walletAddress && !this.deriveSessionId) {
+      throw new Error(
+        'Sign-to-derive session required for writes when walletAddress is configured. ' +
+        'Call setDeriveSession() before writing data.',
+      );
+    }
+    let payload = request;
+    if (this.encryptionKey) {
+      const encryptedOps = await Promise.all(
+        request.operations.map(async (op) => {
+          if (op.properties && typeof op.properties === 'object') {
+            return {
+              ...op,
+              properties: await encryptProperties(
+                this.encryptionKey!,
+                op.properties as Record<string, unknown>,
+              ),
+            };
+          }
+          return op;
+        }),
+      );
+      payload = { ...request, operations: encryptedOps };
+    }
+    const res = await this.request('/api/v1/write', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    return this.parseJson<KfdbWriteResponse>(res, 'write');
+  }
+
+  /**
+   * Acquire a permanent, tenant-private key exactly once using KFDB's Scylla
+   * SERIAL LWT seam. The reserved namespace cannot be overwritten or deleted.
+   * A false result includes the winning value so callers may recover only when
+   * an already-fsynced owner nonce matches exactly.
+   */
+  async claimImmutablePrivateKv(key: string, value: unknown): Promise<KfdbImmutableClaimResponse> {
+    if (!key.startsWith('immutable-claim:') || key.length > 1024) {
+      throw new Error('Immutable private KV claim key must start with immutable-claim: and fit 1024 characters');
+    }
+    if (this.walletAddress && !this.deriveSessionId) {
+      throw new Error(
+        'Sign-to-derive session required for immutable private KV claims when walletAddress is configured. ' +
+        'Call setDeriveSession() before claiming.',
+      );
+    }
+    const res = await this.request('/api/v1/kv', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ key, value, if_absent: true }),
+    });
+    const wire = await this.parseJson<{
+      success: boolean;
+      message: string;
+      acquired?: unknown;
+      existing_value?: unknown;
+    }>(res, 'claim immutable private KV key');
+    if (typeof wire.acquired !== 'boolean') {
+      throw new Error('KFDB immutable private KV claim response omitted its LWT acquired result');
+    }
+    return {
+      success: wire.success,
+      message: wire.message,
+      acquired: wire.acquired,
+      ...(wire.existing_value !== undefined ? { existingValue: wire.existing_value } : {}),
+    };
+  }
+
+  /** Read a tenant-private immutable claim without mutating claim authority. */
+  async getImmutablePrivateKv(key: string): Promise<KfdbImmutableValueResponse> {
+    if (!key.startsWith('immutable-claim:') || key.length > 1024) {
+      throw new Error('Immutable private KV key must start with immutable-claim: and fit 1024 characters');
+    }
+    return this.getPrivateKv(key);
+  }
+
+  /**
+   * Read a derive-authenticated immutable private KV value. This deliberately
+   * exposes only the two immutable namespaces the SDK writes: authority claims
+   * and content-addressed observable artifacts.
+   */
+  async getPrivateKv(key: string): Promise<KfdbImmutableValueResponse> {
+    if (
+      (!key.startsWith('immutable-claim:') && !key.startsWith('content-artifact:'))
+      || key.length > 1024
+    ) {
+      throw new Error('Private KV key must use a supported immutable namespace and fit 1024 characters');
+    }
+    if (this.walletAddress && !this.deriveSessionId) {
+      throw new Error(
+        'Sign-to-derive session required for immutable private KV reads when walletAddress is configured. ' +
+        'Call setDeriveSession() before reading.',
+      );
+    }
+    const res = await this.request(`/api/v1/kv/${encodeURIComponent(key)}`);
+    const wire = await this.parseJson<{
+      success: boolean;
+      key?: unknown;
+      value?: unknown;
+      updated_at?: unknown;
+    }>(res, 'read immutable private KV key');
+    if (!wire.success) return { found: false };
+    if (wire.key !== key || !Object.prototype.hasOwnProperty.call(wire, 'value')) {
+      throw new Error('KFDB immutable private KV read returned a malformed success row');
+    }
+    if (wire.updated_at !== undefined && typeof wire.updated_at !== 'number') {
+      throw new Error('KFDB immutable private KV read returned a malformed timestamp');
+    }
+    return {
+      found: true,
+      value: wire.value,
+      ...(typeof wire.updated_at === 'number' ? { updatedAt: wire.updated_at } : {}),
+    };
+  }
+
+  async writeRickydataGraph(input: RickydataGraphWriteInput): Promise<KfdbWriteResponse> {
+    return this.write(buildRickydataGraphWriteRequest(input));
+  }
+
+  async queryKql(query: string, options: KfdbQueryOptions = {}): Promise<KfdbQueryResponse> {
+    const payload: Record<string, unknown> = { query };
+    if (options.scope) payload.scope = options.scope;
+    if (options.pageSize != null) payload.page_size = options.pageSize;
+    if (options.cursor) payload.cursor = options.cursor;
+    const res = await this.request('/api/v1/query', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+      signal: options.signal,
+    });
+    return this.parseJson<KfdbQueryResponse>(res, 'query KQL');
+  }
+
+  async querySql(query: string, options: KfdbQueryOptions = {}): Promise<KfdbQueryResponse> {
+    const payload: Record<string, unknown> = { query };
+    if (options.scope) payload.scope = options.scope;
+    const res = await this.request('/api/v1/query/sql', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+      signal: options.signal,
+    });
+    return this.parseJson<KfdbQueryResponse>(res, 'query SQL');
+  }
+
+  /**
+   * Semantic (HNSW cosine) search over embedded nodes. The tenant/keyspace is
+   * resolved from the auth headers (API key + wallet address + derive session),
+   * so with an active derive session this searches the wallet's PRIVATE
+   * embeddings. Wiki-v1 uses this over WikiPage summaries (SPEC-002 §6).
+   */
+  async semanticSearch(request: KfdbSemanticSearchRequest): Promise<KfdbSemanticSearchResponse> {
+    const payload: Record<string, unknown> = {
+      query: request.query,
+      limit: request.limit ?? 10,
+      threshold: request.threshold ?? 0.0,
+    };
+    if (request.label) payload.label = request.label;
+    if (request.taskType) payload.task_type = request.taskType;
+    const res = await this.request('/api/v1/semantic/search', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+      signal: request.signal,
+    });
+    return this.parseJson<KfdbSemanticSearchResponse>(res, 'semantic search');
+  }
+
+  /**
+   * Embed one graph entity for semantic search. Pass explicit `text` for nodes
+   * whose stored properties are encrypted at rest (the server cannot extract
+   * text from ciphertext) — e.g. a WikiPage's plaintext-safe `summary` (L6:
+   * embedding vectors are NOT encrypted, so the text must be secret-free).
+   */
+  async embedEntity(request: KfdbEmbedEntityRequest): Promise<KfdbEmbedEntityResponse> {
+    const payload: Record<string, unknown> = { label: request.label, node_id: request.nodeId };
+    if (request.text != null) payload.text = request.text;
+    if (request.properties) payload.properties = request.properties;
+    const res = await this.request('/api/v1/entities/embed', {
+      method: 'POST',
+      headers: this.embeddingHeaders(request.clientId),
+      body: JSON.stringify(payload),
+      signal: request.signal,
+    });
+    return this.parseJson<KfdbEmbedEntityResponse>(res, 'embed entity');
+  }
+
+  /** Embed up to 100 graph entities through KFDB's model-level batch path. */
+  async embedEntitiesBatch(
+    request: KfdbEmbedEntitiesBatchRequest,
+  ): Promise<KfdbEmbedEntitiesBatchResponse> {
+    const entities = request.entities.map((entity) => {
+      const payload: Record<string, unknown> = {
+        label: entity.label,
+        node_id: entity.nodeId,
+      };
+      if (entity.text != null) payload.text = entity.text;
+      if (entity.properties) payload.properties = entity.properties;
+      return payload;
+    });
+    const res = await this.request('/api/v1/entities/embed/model-batch', {
+      method: 'POST',
+      headers: this.embeddingHeaders(request.clientId),
+      body: JSON.stringify({ entities }),
+      signal: request.signal,
+    });
+    return this.parseJson<KfdbEmbedEntitiesBatchResponse>(res, 'embed entities batch');
+  }
+
+  /**
+   * Idempotently remove one graph entity's semantic embedding. The request
+   * follows the same tenant/derive-session routing as embedEntity.
+   */
+  async deleteEntityEmbedding(
+    request: KfdbDeleteEntityEmbeddingRequest,
+  ): Promise<KfdbDeleteEntityEmbeddingResponse> {
+    const res = await this.request('/api/v1/entities/embed', {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ label: request.label, node_id: request.nodeId }),
+      signal: request.signal,
+    });
+    return this.parseJson<KfdbDeleteEntityEmbeddingResponse>(res, 'delete entity embedding');
+  }
+
+  async explainKql(query: string, options: KfdbQueryOptions = {}): Promise<KfdbExplainResponse> {
+    const payload: Record<string, unknown> = { query };
+    if (options.scope) payload.scope = options.scope;
+    const res = await this.request('/api/v1/query/explain', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+      signal: options.signal,
+    });
+    return this.parseJson<KfdbExplainResponse>(res, 'explain KQL');
+  }
+
+  async writeAgentChatTrace(trace: AgentChatTurnTrace): Promise<KfdbWriteResponse> {
+    return this.write({
+      operations: buildAgentChatTraceOperations(trace),
+      skip_embedding: true,
+    });
+  }
+
+  async writeCodexHookTrace(trace: CodexHookTrace): Promise<KfdbWriteResponse> {
+    return this.write({
+      operations: buildCodexHookTraceOperations(trace),
+      skip_embedding: true,
+    });
+  }
+
+  async writeClaudeCodeHookTrace(trace: ClaudeCodeHookTrace): Promise<KfdbWriteResponse> {
+    return this.write({
+      operations: buildClaudeCodeHookTraceOperations(trace),
+      skip_embedding: true,
+    });
+  }
+
+  async writeHermesHookTrace(trace: HermesHookTrace): Promise<KfdbWriteResponse> {
+    return this.write({
+      operations: buildHermesHookTraceOperations(trace),
+      skip_embedding: true,
+    });
+  }
+
+  async enrollSharingKey(request: KfdbEnrollSharingKeyRequest): Promise<KfdbSharingKey> {
+    const payload = {
+      ...request,
+      algorithm: request.algorithm ?? 'X25519',
+    };
+    const res = await this.request('/api/v1/shared-notebooks/keys/enroll', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    return this.parseJson<KfdbSharingKey>(res, 'enroll sharing key');
+  }
+
+  async listSharingKeys(): Promise<KfdbListSharingKeysResponse> {
+    const res = await this.request('/api/v1/shared-notebooks/keys');
+    return this.parseJson<KfdbListSharingKeysResponse>(res, 'list sharing keys');
+  }
+
+  async createSharedNotebook(request: KfdbCreateSharedNotebookRequest): Promise<KfdbSharedNotebookWriteResponse> {
+    const res = await this.request('/api/v1/shared-notebooks', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(request),
+    });
+    return this.parseJson<KfdbSharedNotebookWriteResponse>(res, 'create shared notebook');
+  }
+
+  async listSharedNotebooks(options: { workspaceId?: string; limit?: number } = {}): Promise<KfdbListSharedNotebooksResponse> {
+    const params = new URLSearchParams();
+    if (options.workspaceId) params.set('workspace_id', options.workspaceId);
+    if (options.limit != null) params.set('limit', String(options.limit));
+    const suffix = params.toString() ? `?${params.toString()}` : '';
+    const res = await this.request(`/api/v1/shared-notebooks${suffix}`);
+    const data = await this.parseJson<KfdbSharedNotebook[] | KfdbListSharedNotebooksResponse>(
+      res,
+      'list shared notebooks',
+    );
+    return Array.isArray(data) ? { notebooks: data } : data;
+  }
+
+  async getSharedNotebook(notebookId: string): Promise<KfdbSharedNotebook> {
+    const encodedNotebookId = encodeURIComponent(notebookId);
+    const res = await this.request(`/api/v1/shared-notebooks/${encodedNotebookId}`);
+    return this.parseJson<KfdbSharedNotebook>(res, 'get shared notebook');
+  }
+
+  async updateSharedNotebook(
+    notebookId: string,
+    request: KfdbUpdateSharedNotebookRequest,
+  ): Promise<KfdbSharedNotebookWriteResponse> {
+    const encodedNotebookId = encodeURIComponent(notebookId);
+    const res = await this.request(`/api/v1/shared-notebooks/${encodedNotebookId}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(request),
+    });
+    return this.parseJson<KfdbSharedNotebookWriteResponse>(res, 'update shared notebook');
+  }
+
+  async shareNotebook(
+    notebookId: string,
+    request: KfdbShareNotebookRequest,
+  ): Promise<KfdbShareNotebookResponse> {
+    const encodedNotebookId = encodeURIComponent(notebookId);
+    const res = await this.request(`/api/v1/shared-notebooks/${encodedNotebookId}/share`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(request),
+    });
+    return this.parseJson<KfdbShareNotebookResponse>(res, 'share notebook');
+  }
+
+  async listSharedNotebookMembers(notebookId: string): Promise<KfdbListSharedNotebookMembersResponse> {
+    const encodedNotebookId = encodeURIComponent(notebookId);
+    const res = await this.request(`/api/v1/shared-notebooks/${encodedNotebookId}/members`);
+    return this.parseJson<KfdbListSharedNotebookMembersResponse>(res, 'list shared notebook members');
+  }
+
+  async upsertSharedNotebookGroupKey(
+    request: KfdbUpsertSharedNotebookGroupKeyRequest,
+  ): Promise<KfdbSharedNotebookGroupKey> {
+    const encodedNotebookId = encodeURIComponent(request.notebook_id);
+    const res = await this.request(`/api/v1/shared-notebooks/${encodedNotebookId}/group-keys`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(request),
+    });
+    return this.parseJson<KfdbSharedNotebookGroupKey>(res, 'upsert shared notebook group key');
+  }
+
+  async listSharedNotebookGroupKeys(notebookId: string): Promise<KfdbListSharedNotebookGroupKeysResponse> {
+    const encodedNotebookId = encodeURIComponent(notebookId);
+    const res = await this.request(`/api/v1/shared-notebooks/${encodedNotebookId}/group-keys`);
+    return this.parseJson<KfdbListSharedNotebookGroupKeysResponse>(res, 'list shared notebook group keys');
+  }
+
+  private resolveScope(scope?: KfdbQueryScope): KfdbQueryScope {
+    return scope ?? this.defaultReadScope;
+  }
+
+  private embeddingHeaders(clientId?: string): Headers {
+    const headers = new Headers({ 'Content-Type': 'application/json' });
+    const attributedClientId = clientId?.trim() || this.clientId;
+    if (attributedClientId) headers.set('X-Client-ID', attributedClientId);
+    return headers;
+  }
+
+  private async request(path: string, init?: RequestInit): Promise<Response> {
+    // Auto-refresh derive session if approaching expiry
+    await this.ensureDeriveSession();
+
+    const token = this.token ?? this.apiKey;
+    if (!token) {
+      throw new Error('No auth token available for KFDB request');
+    }
+
+    const headers = new Headers(init?.headers ?? {});
+    headers.set('Authorization', `Bearer ${token}`);
+    if (this.clientId && !headers.has('X-Client-ID')) {
+      headers.set('X-Client-ID', this.clientId);
+    }
+
+    if (this.walletAddress) {
+      headers.set('X-Wallet-Address', this.walletAddress);
+    }
+
+    if (this.deriveSessionId && this.deriveKeyHex) {
+      headers.set('X-Derive-Session-Id', this.deriveSessionId);
+      headers.set('X-Derive-Key', this.deriveKeyHex);
+    }
+
+    const startedAt = performance.now();
+    const response = await fetch(`${this.baseUrl}${path}`, {
+      ...init,
+      headers,
+    });
+    if (this.onResponseMeta) {
+      try {
+        this.onResponseMeta({
+          method: init?.method ?? 'GET',
+          path,
+          status: response.status,
+          ok: response.ok,
+          clientWaitMs: performance.now() - startedAt,
+          ...responseMeta(response),
+        });
+      } catch {
+        // Observability must never change the outcome of a KFDB request.
+      }
+    }
+    return response;
+  }
+
+  /** Re-derive if session is near expiry and autoDerive was configured. */
+  private async ensureDeriveSession(): Promise<void> {
+    if (!this.deriveSignFn || !this.deriveExpiresAt) return;
+    if (Date.now() < this.deriveExpiresAt - this.deriveRefreshMarginMs) return;
+
+    // Deduplicate concurrent refreshes
+    if (!this.derivePromise) {
+      this.derivePromise = this.performDerive().finally(() => {
+        this.derivePromise = null;
+      });
+    }
+    return this.derivePromise;
+  }
+
+  /** Execute the full challenge → sign → derive-key → local-hash flow. */
+  private async performDerive(): Promise<void> {
+    if (!this.walletAddress || !this.deriveSignFn) {
+      throw new Error('autoDerive not configured');
+    }
+
+    const token = this.token ?? this.apiKey;
+    if (!token) {
+      throw new Error('No auth token available for derive challenge');
+    }
+
+    // 1. Fetch challenge
+    const challengeRes = await fetch(`${this.baseUrl}/api/v1/auth/derive-challenge`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+    });
+    if (!challengeRes.ok) {
+      const body = await challengeRes.text().catch(() => '');
+      throw new Error(`Derive challenge failed: ${challengeRes.status} ${body}`);
+    }
+    const challenge: DeriveChallenge = await challengeRes.json();
+
+    // 2. Sign EIP-712 typed data
+    const signature = await this.deriveSignFn(challenge.typed_data);
+
+    // 3. Exchange for session
+    const deriveRes = await fetch(`${this.baseUrl}/api/v1/auth/derive-key`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Accept': 'application/json',
+      },
+      body: JSON.stringify({
+        challenge_id: challenge.challenge_id,
+        signature,
+        address: this.walletAddress,
+      }),
+    });
+    if (!deriveRes.ok) {
+      const body = await deriveRes.text().catch(() => '');
+      throw new Error(`Derive key exchange failed: ${deriveRes.status} ${body}`);
+    }
+    const result: DeriveKeyResult = await deriveRes.json();
+
+    // 4. Derive key locally — SHA-256(signature_bytes)
+    const keyHex = result.key_hex ?? deriveKeyFromSignature(signature);
+
+    // 5. Store session
+    this.deriveSessionId = result.session_id;
+    this.deriveKeyHex = keyHex;
+    const expiresAt = normalizeKfdbExpiresAt(result.expires_at);
+    this.deriveExpiresAt = expiresAt;
+
+    // 6. Persist to store if configured
+    if (this.deriveStore) {
+      await this.deriveStore.set(this.walletAddress, {
+        sessionId: result.session_id,
+        keyHex,
+        expiresAt,
+        address: this.walletAddress,
+      });
+    }
+  }
+
+  private async parseJson<T>(
+    res: Response,
+    action: string,
+    options: { entity?: { label: string; id: string } } = {},
+  ): Promise<T> {
+    if (!res.ok) {
+      const raw = await res.text().catch(() => '');
+      let payload: { message?: unknown; code?: unknown; details?: unknown } = {};
+      try {
+        const decoded = JSON.parse(raw) as unknown;
+        if (decoded && typeof decoded === 'object') payload = decoded as typeof payload;
+      } catch {
+        // Non-JSON routing errors still retain their plain response text.
+      }
+      const serverMessage = typeof payload.message === 'string' ? payload.message : raw.trim() || undefined;
+      const errorOptions = {
+        ...responseMeta(res),
+        ...(serverMessage ? { serverMessage } : {}),
+        ...(typeof payload.code === 'string' ? { code: payload.code } : {}),
+        ...(typeof payload.details === 'string' ? { details: payload.details } : {}),
+      };
+      const entity = options.entity;
+      if (
+        res.status === 404
+        && entity
+        && (payload.code === 'ENTITY_NOT_FOUND' || serverMessage === `Entity not found: ${entity.label}:${entity.id}`)
+      ) {
+        throw new KfdbEntityNotFoundError(entity.label, entity.id, errorOptions);
+      }
+      throw new KfdbHttpError(res.status, action, errorOptions);
+    }
+    return res.json() as Promise<T>;
+  }
+}

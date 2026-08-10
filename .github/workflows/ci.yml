@@ -1,0 +1,47 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: Build, Test, and Package
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Audit production dependencies
+        run: npm audit --omit=dev --audit-level=high
+      - name: Check public boundary
+        run: npm run check:public
+      - run: npm run build
+      - run: npm test
+      - run: npm run typecheck
+      - name: Smoke test CLIs
+        run: |
+          node packages/core/bin/rickydata.js --version
+          node packages/core/bin/mcpg.js --version
+      - name: Verify npm package contents
+        run: |
+          node --input-type=module <<'NODE'
+          import { execFileSync } from 'node:child_process';
+          import { readFileSync } from 'node:fs';
+          const config = JSON.parse(readFileSync('public-release.json', 'utf8'));
+          for (const workspace of config.publishPackages) {
+            const output = execFileSync('npm', ['pack', '--dry-run', '--json', '-w', workspace], { encoding: 'utf8' });
+            const packed = JSON.parse(output)[0];
+            if (!packed?.files?.length) throw new Error(`${workspace} produced an empty package`);
+            console.log(`${packed.name}@${packed.version}: ${packed.files.length} files`);
+          }
+          NODE

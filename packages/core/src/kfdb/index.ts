@@ -1,0 +1,267 @@
+export { KFDBClient } from './client.js';
+export { KfdbReadSession } from './read-session.js';
+export { KfdbEntityNotFoundError, KfdbHttpError } from './errors.js';
+export {
+  ERC8128_CHAIN_ID,
+  ERC8128_LABEL,
+  buildErc8128SignatureBase,
+  signErc8128Request,
+} from './erc8128.js';
+export type { Erc8128Headers, Erc8128SignInput } from './erc8128.js';
+export { MemoryDeriveSessionStore, FileDeriveSessionStore } from './derive-session-store.js';
+export { buildAgentChatTraceOperations, createAgentChatTraceFixture } from './agent-chat-trace.js';
+export { buildClaudeCodeHookTraceOperations, buildClaudeCodeHookTraceWriteBundle, createClaudeCodeHookTraceFixture, claudeCodeSessionNodeId } from './claude-code-hook-trace.js';
+export { buildCodexHookTraceOperations, buildCodexHookTraceWriteBundle, codexSessionNodeId, createCodexHookTraceFixture } from './codex-hook-trace.js';
+export { buildHermesHookTraceOperations, createHermesHookTraceFixture } from './hermes-hook-trace.js';
+export {
+  SESSION_ARTIFACT_MANIFEST_CONTRACT_VERSION,
+  SESSION_ARTIFACT_MANIFEST_MEDIA_TYPE,
+  buildSessionArtifactManifestOperations,
+} from './session-artifact-manifest.js';
+export type {
+  SessionArtifactManifestDocument,
+  SessionArtifactManifestEngine,
+  SessionArtifactManifestEntry,
+  SessionArtifactManifestInput,
+} from './session-artifact-manifest.js';
+export {
+  CONTENT_ARTIFACT_CONTRACT_VERSION,
+  CONTENT_ARTIFACT_MANIFEST_CONTRACT_VERSION,
+  CONTENT_ARTIFACT_MAX_INLINE_BYTES,
+  DECISION_PACK_CONTRACT_VERSION,
+  DecisionPackEdgeType,
+  DecisionPackNodeLabel,
+  buildContentArtifactOperations,
+  buildContextDeliveryReceiptOperations,
+  buildDecisionObservationOperations,
+  buildDecisionPackLinkOperations,
+  buildDecisionPackOperations,
+  deriveContentArtifactId,
+  deriveDecisionPackId,
+} from './decision-pack-v1.js';
+export type {
+  CanonicalGraphRef,
+  ContentArtifactInput,
+  ContentArtifactRef,
+  ContextDeliveryReceiptInput,
+  DecisionKind,
+  DecisionObservationInput,
+  DecisionPackCompleteness,
+  DecisionPackGraphOperation,
+  DecisionPackInput,
+  DecisionSourceReceiptInput,
+  DecisionSourceStatus,
+  ImmutableContentArtifactWrite,
+  RepositorySnapshot,
+  ObservableContextDelivery,
+} from './decision-pack-v1.js';
+export {
+  WORK_PROVENANCE_CONTRACT_VERSION,
+  buildObjectiveObservationOperations,
+  buildRepositoryStateReceiptOperations,
+  buildVerificationObservationOperations,
+  buildRunUsageReceiptOperations,
+  buildRunOutcomeReceiptOperations,
+} from './work-provenance-v1.js';
+export type {
+  ObjectiveObservationInput,
+  RepositoryStateReceiptInput,
+  RunOutcomeReceiptInput,
+  RunOutcomeStatus,
+  RunUsageReceiptInput,
+  Sha256Ref,
+  VerificationObservationInput,
+  VerificationOutcome,
+  VerificationPhase,
+  WorkContractRef,
+} from './work-provenance-v1.js';
+export {
+  HARNESS_SESSION_KEY_LABEL,
+  SAME_SESSION_EDGE_TYPE,
+  sessionLinkNodeId,
+  buildSessionLinkOperations,
+} from './session-link.js';
+export type { SessionLinkInput, BuildSessionLinkInput } from './session-link.js';
+export {
+  GraphEdgeType,
+  GraphEntityKind,
+  RICKYDATA_GRAPH_NAMESPACE,
+  RICKYDATA_GRAPH_SCHEMA_VERSION,
+  buildRickydataGraphWriteRequest,
+  canonicalizeRickydataRepoRef,
+  deriveRickydataGraphEdgeId,
+  deriveRickydataGraphId,
+  rickydataGraphContract,
+  rickydataGraphValue,
+} from './rickydata-graph.js';
+export {
+  MEMORY_V1_CONTRACT_VERSION,
+  OPEN_QUESTION_LABEL,
+  MEMORY_V1_NODE_LABELS,
+  MEMORY_V1_EDGE_TYPES,
+  MEMORY_V1_RESERVED_KEYS,
+  isMemoryV1NodeLabel,
+  isMemoryV1EdgeType,
+  assertMemoryV1NodeLabel,
+  assertMemoryV1EdgeType,
+  deriveOpenQuestionId,
+  buildOpenQuestionWriteRequest,
+} from './memory-v1.js';
+export {
+  ISSUE_SCORING_SCHEMA,
+  ISSUE_SCORING_KIND,
+  ISSUE_SCORING_WRITER,
+  ISSUE_SCORING_LABEL,
+  ISSUE_SCORING_SCAN_KQL,
+  HOME_ISSUE_SCORING_NAMESPACE,
+  issueScoreSnapshotDayId,
+  issueScoreSnapshotId,
+  decodeIssueScoreRows,
+  latestIssueScores,
+  topIssueCandidates,
+} from './issue-scoring-v1.js';
+export type { IssueScoreSnapshotRow, IssueScoreFilters } from './issue-scoring-v1.js';
+export {
+  WIKI_V1_CONTRACT_VERSION,
+  WIKI_V1_SCHEMA_STAMP,
+  WIKI_V1_NAMESPACE,
+  WIKI_V1_NODE_LABELS,
+  WIKI_V1_EDGE_TYPES,
+  WIKI_PAGE_KINDS,
+  WIKI_PAGE_STATUSES,
+  WIKI_CLAIM_STATUSES,
+  WIKI_CONFIDENCE_TIERS,
+  WIKI_INFERRED_SCORES,
+  WIKI_FINGERPRINT_KINDS,
+  WIKI_SUMMARY_MAX_CHARS,
+  WIKI_SENSITIVITIES,
+  WIKI_QUOTE_EXCERPT_MAX_CHARS,
+  isWikiV1NodeLabel,
+  isWikiV1EdgeType,
+  assertWikiV1NodeLabel,
+  assertWikiV1EdgeType,
+  normalizeWikiClaimText,
+  sha256Hex,
+  deriveWikiPageId,
+  deriveWikiClaimId,
+  deriveWikiClaimIdV1Legacy,
+  deriveWikiRevisionId,
+  deriveWikiEdgeId,
+  buildWikiPageWriteOps,
+  buildWikiClaimWriteOps,
+  buildWikiRevisionWriteOps,
+  buildWikiEdgeOp,
+  AKC_PRIVATE_LABELS,
+  assertAkcPrivateLabel,
+  deriveContextPackId,
+  buildContextPackLogOp,
+} from './wiki-v1.js';
+export type {
+  WikiV1NodeLabel,
+  WikiV1EdgeType,
+  WikiPageKind,
+  WikiPageStatus,
+  WikiClaimStatus,
+  WikiConfidenceTier,
+  WikiFingerprintKind,
+  WikiSensitivity,
+  WikiPageInput,
+  WikiClaimInput,
+  WikiRevisionInput,
+  AkcPrivateLabel,
+  ContextPackSelectedItem,
+  ContextPackOmittedEntry,
+  ContextPackLogInput,
+} from './wiki-v1.js';
+export { kfdbValue } from './values.js';
+export {
+  generateSharingKeyPair,
+  generateSharedNotebookGroupKey,
+  importSharedNotebookGroupKey,
+  wrapSharedNotebookGroupKey,
+  unwrapSharedNotebookGroupKey,
+  encryptSharedNotebookField,
+  decryptSharedNotebookField,
+  encryptSharedNotebookFields,
+  decryptSharedNotebookRows,
+} from '../encryption.js';
+export type { SharingKeyPair, WrappedGroupKey } from '../encryption.js';
+export type { AgentChatTraceEvent, AgentChatTurnTrace } from './agent-chat-trace.js';
+export type { ClaudeCodeHookEventRecord, ClaudeCodeHookTrace, ClaudeCodeHookTraceWriteBundle, ClaudeCodePlanRecord } from './claude-code-hook-trace.js';
+export type { CodexHookEventRecord, CodexHookTrace, CodexHookTraceWriteBundle } from './codex-hook-trace.js';
+export type { HermesHookEventRecord, HermesHookTrace } from './hermes-hook-trace.js';
+export type {
+  RickydataGraphContract,
+  RickydataGraphEdge,
+  RickydataGraphNode,
+  RickydataGraphPrimitiveValue,
+  RickydataGraphWriteInput,
+  RickydataGraphWriteOperation,
+  RickydataGraphWriteRequest,
+} from './rickydata-graph.js';
+export type {
+  MemoryV1NodeLabel,
+  MemoryV1EdgeType,
+  OpenQuestionStatus,
+  OpenQuestionInput,
+} from './memory-v1.js';
+
+export type {
+  AutoDeriveOptions,
+  DeriveChallenge,
+  DeriveKeyResult,
+  DeriveSession,
+  DeriveSessionStore,
+  KfdbBatchGetEntitiesRequest,
+  KfdbBatchGetEntitiesResponse,
+  KfdbEntityChange,
+  KfdbListEntityChangesOptions,
+  KfdbListEntityChangesResponse,
+  KfdbAckEntityChangesResponse,
+  KfdbClientConfig,
+  KfdbCreateSharedNotebookRequest,
+  KfdbEnrollSharingKeyRequest,
+  KfdbEntityRef,
+  KfdbEntityResponse,
+  KfdbFilterEntitiesRequest,
+  KfdbGetEntityOptions,
+  KfdbLabelInfo,
+  KfdbImmutableClaimResponse,
+  KfdbImmutableValueResponse,
+  KfdbListEntitiesOptions,
+  KfdbListEntitiesResponse,
+  KfdbListLabelsResponse,
+  KfdbKnowledgeBundleRequest,
+  KfdbKnowledgeBundleResponse,
+  KfdbListSharedNotebookGroupKeysResponse,
+  KfdbListSharedNotebookMembersResponse,
+  KfdbListSharedNotebooksResponse,
+  KfdbListSharingKeysResponse,
+  KfdbExplainResponse,
+  KfdbPropertyValue,
+  KfdbQueryOptions,
+  KfdbQueryResponse,
+  KfdbQueryScope,
+  KfdbResponseMeta,
+  KfdbReadSessionOptions,
+  KfdbSemanticSearchRequest,
+  KfdbSemanticSearchResponse,
+  KfdbSemanticSearchResult,
+  KfdbEmbedEntityRequest,
+  KfdbEmbedEntityResponse,
+  KfdbEmbedEntitiesBatchRequest,
+  KfdbEmbedEntitiesBatchResponse,
+  KfdbDeleteEntityEmbeddingRequest,
+  KfdbDeleteEntityEmbeddingResponse,
+  KfdbShareNotebookRequest,
+  KfdbShareNotebookResponse,
+  KfdbSharedNotebook,
+  KfdbSharedNotebookGroupKey,
+  KfdbSharedNotebookKeyAlgorithm,
+  KfdbSharedNotebookMember,
+  KfdbSharedNotebookRole,
+  KfdbSharingKey,
+  KfdbUpsertSharedNotebookGroupKeyRequest,
+  KfdbWriteRequest,
+  KfdbWriteResponse,
+} from './types.js';

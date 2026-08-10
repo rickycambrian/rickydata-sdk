@@ -1,0 +1,20 @@
+{
+  "name": "rickydata-sdk",
+  "private": true,
+  "workspaces": [
+    "packages/*"
+  ],
+  "scripts": {
+    "build": "turbo run build",
+    "build:core": "turbo run build --filter=rickydata",
+    "build:react": "turbo run build --filter=@rickydata/react",
+    "test": "turbo run test",
+    "typecheck": "turbo run typecheck",
+    "check:public": "node scripts/check-public-release.mjs",
+    "clean": "turbo run clean && rm -rf node_modules"
+  },
+  "devDependencies": {
+    "turbo": "^1.11.0",
+    "typescript": "^5.3.0"
+  }
+}

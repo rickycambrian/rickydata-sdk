@@ -1,0 +1,626 @@
+openapi: 3.1.0
+info:
+  title: RickyData Cross-Language Auth + KFDB Contract
+  version: 1.0.0
+  summary: Non-runtime wire contract for cross-language clients such as rickydatascience.
+  description: |
+    This artifact documents the HTTP-level contract that cross-language clients should
+    mirror without importing the TypeScript SDK at runtime.
+
+    Normative scope:
+    - wallet-token creation via `/api/auth/token-message` and `/api/auth/create-token`
+    - Core2/device-wallet delegation via `/auth/device/*` and `/auth/watch/device/*`
+    - KFDB sign-to-derive session establishment via `/api/v1/auth/derive-challenge` and
+      `/api/v1/auth/derive-key`
+    - canonical `mcpwt_` token payload fields
+    - derive-session cache shape and request headers
+
+    Non-normative notes:
+    - challenge/verify JWT auth is a fallback or legacy flow and should not be the primary
+      path for new cross-language clients
+    - browser login UX remains out-of-band: obtain an `mcpwt_` token elsewhere, then pass
+      that token into the client directly
+    - `~/.rickydata/credentials.json`, browser `localStorage`, and CLI prompts are local
+      implementation details, not part of this contract
+servers:
+  - url: https://mcp.rickydata.org
+    description: MCP Gateway
+  - url: https://agents.rickydata.org
+    description: Agent Gateway
+paths:
+  /api/auth/token-message:
+    get:
+      summary: Get the canonical wallet-token signing message
+      description: |
+        Cross-language clients sign the returned message with EIP-191 `personal_sign`,
+        then exchange the signature at `/api/auth/create-token`.
+      parameters:
+        - in: query
+          name: walletAddress
+          required: true
+          schema:
+            type: string
+          description: Lowercase or checksummed 0x-prefixed Ethereum wallet address.
+        - in: query
+          name: expiresAt
+          required: true
+          schema:
+            type: string
+            format: date-time
+          description: Requested wallet-token expiry as an ISO 8601 timestamp.
+        - in: query
+          name: permissions
+          required: false
+          schema:
+            type: string
+          description: Comma-separated permission list such as `telegram:read,kfdb:write`.
+        - in: query
+          name: serverId
+          required: false
+          schema:
+            type: string
+          description: Optional server restriction for the issued token.
+      responses:
+        '200':
+          description: Canonical message to sign
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [message]
+                properties:
+                  message:
+                    type: string
+              example:
+                message: |-
+                  MCP Gateway Auth
+                  Wallet: 0x1234567890abcdef1234567890abcdef12345678
+                  Expires: 2027-01-01T00:00:00Z
+  /api/auth/create-token:
+    post:
+      summary: Create a long-lived self-verifying wallet token
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WalletTokenCreateRequest'
+            examples:
+              default:
+                value:
+                  walletAddress: 0x1234567890abcdef1234567890abcdef12345678
+                  signature: 0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa1b
+                  expiresAt: '2027-01-01T00:00:00Z'
+                  permissions:
+                    - telegram:read
+                    - kfdb:write
+                  serverId: srv-123
+      responses:
+        '200':
+          description: Wallet token issued
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WalletTokenCreateResponse'
+              example:
+                token: mcpwt_eyJzdWIiOiIweDEyMzQ1Njc4OTBhYmNkZWYxMjM0NTY3ODkwYWJjZGVmMTIzNDU2NzgiLCJpc3MiOiJyaWNreWRhdGEiLCJleHAiOjE4OTM0NTYwMDAsImlhdCI6MTcxMjc5MzYwMCwicGVybWlzc2lvbnMiOlsidGVsZWdyYW06cmVhZCIsImtmZGI6d3JpdGUiXSwic2VydmVyX2lkIjoic3J2LTEyMyJ9
+                walletAddress: 0x1234567890abcdef1234567890abcdef12345678
+                expiresAt: '2027-01-01T00:00:00Z'
+  /api/v1/auth/derive-challenge:
+    post:
+      summary: Start KFDB sign-to-derive session setup
+      description: |
+        Public challenge endpoint. The returned `typed_data` is signed with EIP-712.
+        Cross-language clients should treat the full object as opaque typed data supplied
+        by the server; the wallet signature supplies the user proof during derive-key
+        exchange.
+      responses:
+        '200':
+          description: Derive challenge issued
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DeriveChallenge'
+              example:
+                challenge_id: challenge-abc
+                typed_data:
+                  types:
+                    EIP712Domain:
+                      - name: name
+                        type: string
+                  primaryType: Derive
+                  domain:
+                    name: KFDB
+                  message:
+                    wallet: 0x1234567890abcdef1234567890abcdef12345678
+  /api/v1/auth/derive-key:
+    post:
+      summary: Exchange a signed derive challenge for a KFDB derive session
+      description: |
+        Clients compute the local encryption key as `SHA-256(signature bytes)` and store it
+        alongside the returned session metadata. The server response does not contain the key.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DeriveKeyRequest'
+            example:
+              challenge_id: challenge-abc
+              signature: 0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb1c
+              address: 0x1234567890abcdef1234567890abcdef12345678
+      responses:
+        '200':
+          description: Derive session established
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DeriveKeyResult'
+              example:
+                session_id: session-123
+                expires_at: 1712800000000
+  /auth/device:
+    post:
+      summary: Start device-wallet pairing
+      description: |
+        Returns a short-lived user code and a device-wallet proof message. The device signs
+        `deviceProofMessage` with its fresh local wallet before the user approves the pairing.
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DevicePairingRequest'
+            example:
+              client: rickydata_terminal
+              platform: esp32
+              permissions:
+                - agents:voice
+                - provider-vault:device-s2d
+      responses:
+        '201':
+          description: Pairing challenge created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DevicePairingChallenge'
+  /auth/device/{deviceCode}/proof:
+    post:
+      summary: Prove device-wallet ownership
+      parameters:
+        - in: path
+          name: deviceCode
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DeviceWalletProof'
+      responses:
+        '200':
+          description: Device wallet verified for this pairing
+  /auth/device/approve:
+    post:
+      summary: Approve a proved device wallet
+      description: |
+        Requires a user Bearer token. The approval persists a scoped user-wallet to
+        device-wallet delegation and prepares the device's first short-lived gateway session.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DeviceApprovalRequest'
+      responses:
+        '200':
+          description: Device delegation approved
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DeviceApproval'
+  /auth/watch/device/{deviceCode}:
+    get:
+      summary: Poll device pairing status
+      description: Compatibility polling path used by Core2 firmware.
+      parameters:
+        - in: path
+          name: deviceCode
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Approved device session
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DeviceApproval'
+        '202':
+          description: Pairing still pending
+        '404':
+          description: Pairing expired or unknown
+  /auth/device/challenge:
+    get:
+      summary: Request a device-session refresh challenge
+      parameters:
+        - in: query
+          name: deviceWalletAddress
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Refresh challenge to sign with the device wallet
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DeviceRefreshChallenge'
+  /auth/device/refresh:
+    post:
+      summary: Refresh a device session by device-wallet signature
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DeviceRefreshRequest'
+      responses:
+        '200':
+          description: New short-lived gateway session for the delegated device
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DeviceSessionRefresh'
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: mcpwt_ or JWT
+  schemas:
+    WalletTokenCreateRequest:
+      type: object
+      required:
+        - walletAddress
+        - signature
+        - expiresAt
+      properties:
+        walletAddress:
+          type: string
+        signature:
+          type: string
+          description: 0x-prefixed EIP-191 personal_sign signature.
+        expiresAt:
+          type: string
+          format: date-time
+        permissions:
+          type: array
+          items:
+            type: string
+        serverId:
+          type: string
+    WalletTokenCreateResponse:
+      type: object
+      required:
+        - token
+        - walletAddress
+        - expiresAt
+      properties:
+        token:
+          type: string
+          description: Self-verifying wallet token beginning with `mcpwt_`.
+        walletAddress:
+          type: string
+        expiresAt:
+          type: string
+          format: date-time
+    McpwtPayload:
+      type: object
+      description: |
+        Canonical payload embedded after the `mcpwt_` prefix. New clients should treat
+        `sub` as the canonical wallet identity field.
+      required:
+        - sub
+        - iss
+        - exp
+        - iat
+      properties:
+        sub:
+          type: string
+          description: Canonical wallet address field.
+        iss:
+          type: string
+        exp:
+          type: integer
+          description: Unix timestamp in seconds.
+        iat:
+          type: integer
+          description: Unix timestamp in seconds.
+        tid:
+          type: string
+        permissions:
+          type: array
+          items:
+            type: string
+        server_id:
+          type: string
+      example:
+        sub: 0x1234567890abcdef1234567890abcdef12345678
+        iss: rickydata
+        exp: 1893456000
+        iat: 1712793600
+        permissions:
+          - telegram:read
+          - kfdb:write
+        server_id: srv-123
+    LegacyTokenDecodeNote:
+      type: object
+      description: |
+        `wallet` is legacy decode compatibility only. New cross-language clients should not
+        depend on `wallet` as the canonical field when decoding `mcpwt_` payloads.
+      properties:
+        wallet:
+          type: string
+          deprecated: true
+    DeriveChallenge:
+      type: object
+      required:
+        - challenge_id
+        - typed_data
+      properties:
+        challenge_id:
+          type: string
+        typed_data:
+          type: object
+          additionalProperties: true
+    DeriveKeyRequest:
+      type: object
+      required:
+        - challenge_id
+        - signature
+        - address
+      properties:
+        challenge_id:
+          type: string
+        signature:
+          type: string
+        address:
+          type: string
+    DeriveKeyResult:
+      type: object
+      required:
+        - session_id
+        - expires_at
+      properties:
+        session_id:
+          type: string
+        expires_at:
+          type: integer
+          description: Unix timestamp in milliseconds.
+    DeriveSessionCache:
+      type: object
+      description: |
+        Suggested persisted cache shape for cross-language clients. Key entries by lowercase
+        wallet address and refresh when within 60 seconds of `expiresAt`.
+      required:
+        - sessionId
+        - keyHex
+        - expiresAt
+        - address
+      properties:
+        sessionId:
+          type: string
+        keyHex:
+          type: string
+          description: SHA-256(signature bytes), typically stored as a 0x-prefixed 32-byte hex string.
+        expiresAt:
+          type: integer
+          description: Unix timestamp in milliseconds.
+        address:
+          type: string
+    DevicePairingRequest:
+      type: object
+      properties:
+        client:
+          type: string
+        platform:
+          type: string
+        label:
+          type: string
+        permissions:
+          type: array
+          items:
+            type: string
+    DevicePairingChallenge:
+      type: object
+      required:
+        - deviceCode
+        - userCode
+        - verificationUri
+        - expiresIn
+        - interval
+        - deviceProofNonce
+        - deviceProofMessage
+      properties:
+        deviceCode:
+          type: string
+        userCode:
+          type: string
+          description: Human-entered code such as `ABCD-2345`.
+        verificationUri:
+          type: string
+          format: uri
+        verificationUriComplete:
+          type: string
+          format: uri
+        expiresIn:
+          type: integer
+          description: Pairing expiry in seconds.
+        interval:
+          type: integer
+          description: Recommended polling interval in seconds.
+        deviceProofNonce:
+          type: string
+        deviceProofMessage:
+          type: string
+          description: EIP-191 message the device wallet signs before approval.
+    DeviceWalletProof:
+      type: object
+      required:
+        - deviceWalletAddress
+        - signature
+      properties:
+        deviceWalletAddress:
+          type: string
+        devicePublicKey:
+          type: string
+          description: Optional uncompressed secp256k1 public key for ESP32 proof mode.
+        signature:
+          type: string
+          description: EIP-191 signature over `deviceProofMessage`, or DER ECDSA over SHA-256(deviceProofMessage) when `devicePublicKey` is supplied.
+    DeviceApprovalRequest:
+      type: object
+      required:
+        - userCode
+      properties:
+        userCode:
+          type: string
+        scopes:
+          type: array
+          items:
+            type: string
+        ttlSeconds:
+          type: integer
+          description: Delegation lifetime. Gateway default is 14 days and max is 30 days.
+    DeviceApproval:
+      type: object
+      required:
+        - status
+        - walletAddress
+        - deviceWalletAddress
+        - scopes
+        - expiresAt
+        - delegationExpiresAt
+      properties:
+        status:
+          type: string
+          enum: [APPROVED]
+        token:
+          type: string
+          description: Present when returned to the polling device.
+        walletAddress:
+          type: string
+          description: User wallet that owns the delegation.
+        deviceWalletAddress:
+          type: string
+        scopes:
+          type: array
+          items:
+            type: string
+        expiresAt:
+          type: integer
+          description: Gateway session expiry in milliseconds.
+        delegationExpiresAt:
+          type: integer
+          description: Device delegation expiry in milliseconds.
+    DeviceRefreshChallenge:
+      type: object
+      required:
+        - nonce
+        - message
+        - expiresAt
+        - deviceWalletAddress
+      properties:
+        nonce:
+          type: string
+        message:
+          type: string
+        expiresAt:
+          type: integer
+        deviceWalletAddress:
+          type: string
+    DeviceRefreshRequest:
+      type: object
+      required:
+        - deviceWalletAddress
+        - nonce
+        - signature
+      properties:
+        deviceWalletAddress:
+          type: string
+        nonce:
+          type: string
+        signature:
+          type: string
+          description: EIP-191 signature over the refresh challenge message.
+    DeviceSessionRefresh:
+      type: object
+      required:
+        - token
+        - walletAddress
+        - deviceWalletAddress
+        - scopes
+        - expiresAt
+        - delegationExpiresAt
+      properties:
+        token:
+          type: string
+        walletAddress:
+          type: string
+        deviceWalletAddress:
+          type: string
+        scopes:
+          type: array
+          items:
+            type: string
+        expiresAt:
+          type: integer
+        delegationExpiresAt:
+          type: integer
+x-rickydata-erc8128:
+  summary: Token-free KFDB auth via ERC-8128 HTTP Message Signatures (RFC 9421 + EIP-191).
+  description: |
+    KFDB (http://34.60.37.158) accepts per-request wallet signatures as its
+    priority-1 auth method. The wallet IS the credential: an unknown wallet is
+    auto-provisioned a tenant with read+write on first request, so no
+    operator-issued API key is needed. Reference implementations:
+    TypeScript `rickydata/kfdb` `signErc8128Request` (this repo,
+    packages/core/src/kfdb/erc8128.ts) and rd-plugin `src/lib/erc8128.ts`;
+    server: knowledgeflow_db `crates/kfdb-api/src/auth/erc8128.rs`.
+  requestHeaders:
+    Signature-Input: 'eth=(@method @path @authority;created={unix};expires={unix};nonce="{nonce}";keyid="erc8128:{chainId}:{address}")'
+    Signature: 'eth=:{base64 of 65-byte r||s||v, v=27/28}:'
+  signatureBase: |
+    "@method": POST
+    "@path": /api/v1/write
+    "@authority": 34.60.37.158
+    "@signature-params": (@method @path @authority;created=...;expires=...;nonce="...";keyid="...")
+  rules:
+    - Covered components are @method @path @authority ONLY. The server verifies
+      with an empty body slice at the middleware layer, so a content-digest
+      header would fail verification — never send one.
+    - No trailing newline after the @signature-params line.
+    - Sign the base bytes with EIP-191 personal_sign (prefix
+      "\x19Ethereum Signed Message:\n{byteLength}", keccak256, secp256k1).
+    - "@authority is URL.host (port only when non-default) — must equal the Host header the HTTP client sends."
+    - created may be backdated a few seconds for clock skew; expires - created
+      must be <= 120s (server max validity; clients use 90s).
+    - Nonces are single-use per keyid. Sign fresh headers for EVERY request;
+      replaying a header pair returns 401 "ERC-8128 nonce replay detected".
+    - chainId is 8453 (Base mainnet) on this platform.
+x-rickydata-notes:
+  requestHeadersAfterDerive:
+    - X-Wallet-Address
+    - X-Derive-Session-Id
+    - X-Derive-Key
+  implementationNotes:
+    - Browser login is out-of-band; obtain an mcpwt_ token elsewhere, then inject it into the client.
+    - Do not require cross-language clients to read JS credential files or browser storage.
+    - Core2 devices should expect user interaction only at initial pairing and delegation renewal; refreshes are device-wallet signed.

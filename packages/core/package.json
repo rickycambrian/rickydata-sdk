@@ -1,0 +1,130 @@
+{
+  "name": "rickydata",
+  "version": "1.16.3",
+  "description": "TypeScript SDK and CLI for the MCP Gateway \u2014 auth, agents, tool calling, and x402 payments",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    },
+    "./agent": {
+      "types": "./dist/agent/index.d.ts",
+      "import": "./dist/agent/index.js",
+      "default": "./dist/agent/index.js"
+    },
+    "./a2a": {
+      "types": "./dist/a2a/index.d.ts",
+      "import": "./dist/a2a/index.js",
+      "default": "./dist/a2a/index.js"
+    },
+    "./wallet": {
+      "types": "./dist/wallet/index.d.ts",
+      "import": "./dist/wallet/index.js",
+      "default": "./dist/wallet/index.js"
+    },
+    "./canvas": {
+      "types": "./dist/canvas/index.d.ts",
+      "import": "./dist/canvas/index.js",
+      "default": "./dist/canvas/index.js"
+    },
+    "./pixel": {
+      "types": "./dist/pixel/index.d.ts",
+      "import": "./dist/pixel/index.js",
+      "default": "./dist/pixel/index.js"
+    },
+    "./mcp": {
+      "types": "./dist/mcp/index.d.ts",
+      "import": "./dist/mcp/index.js",
+      "default": "./dist/mcp/index.js"
+    },
+    "./geo-wallet": {
+      "types": "./dist/geo-wallet/index.d.ts",
+      "import": "./dist/geo-wallet/index.js",
+      "default": "./dist/geo-wallet/index.js"
+    },
+    "./rpc": {
+      "types": "./dist/rpc/index.d.ts",
+      "import": "./dist/rpc/index.js",
+      "default": "./dist/rpc/index.js"
+    },
+    "./kfdb": {
+      "types": "./dist/kfdb/index.d.ts",
+      "import": "./dist/kfdb/index.js",
+      "default": "./dist/kfdb/index.js"
+    },
+    "./research": {
+      "types": "./dist/research/index.d.ts",
+      "import": "./dist/research/index.js",
+      "default": "./dist/research/index.js"
+    },
+    "./realtime": {
+      "types": "./dist/realtime/index.d.ts",
+      "import": "./dist/realtime/index.js",
+      "default": "./dist/realtime/index.js"
+    },
+    "./providers": {
+      "types": "./dist/providers/index.d.ts",
+      "import": "./dist/providers/index.js",
+      "default": "./dist/providers/index.js"
+    },
+    "./knowledge": {
+      "types": "./dist/knowledge/index.d.ts",
+      "import": "./dist/knowledge/index.js",
+      "default": "./dist/knowledge/index.js"
+    }
+  },
+  "bin": {
+    "rickydata": "./bin/rickydata.js",
+    "rickydata-cli": "./bin/rickydata-cli.js",
+    "mcpg": "./bin/mcpg.js",
+    "rickydata-agent-proxy": "./bin/agent-proxy.js"
+  },
+  "files": [
+    "dist",
+    "vendor",
+    "bin",
+    "contracts"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "clean": "rm -rf dist"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/rickycambrian/rickydata-sdk.git",
+    "directory": "packages/core"
+  },
+  "bugs": {
+    "url": "https://github.com/rickycambrian/rickydata-sdk/issues"
+  },
+  "homepage": "https://marketplace.rickydata.org",
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "ai",
+    "agents",
+    "cli"
+  ],
+  "devDependencies": {
+    "@types/node": "^20.19.33",
+    "typescript": "^5.3.0",
+    "viem": "^2.0.0",
+    "vitest": "^3.0.0"
+  },
+  "license": "MIT",
+  "dependencies": {
+    "@noble/curves": "^1.9.1",
+    "chalk": "^5.6.2",
+    "cli-table3": "^0.6.5",
+    "commander": "^14.0.3",
+    "open": "^11.0.0",
+    "ora": "^9.3.0",
+    "viem": "^2.0.0"
+  }
+}
